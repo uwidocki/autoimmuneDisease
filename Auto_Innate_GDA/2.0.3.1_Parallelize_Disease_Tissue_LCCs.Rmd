@@ -1,0 +1,135 @@
+---
+title: "2.0.3.1_Parallelize_Disease_Tissue_LCCs"
+author: "Ursula Widocki"
+date: "2/18/2022"
+output: html_document
+---
+
+```{r}
+rm(list=ls())
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+library(igraph)
+library(superheat)
+library(corrplot)
+library(patchwork)
+library(Cairo)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+```
+
+```{r}
+## Read in PPI data
+ppi <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+ppi_df <- ppi[,c("Symbol_A", "Symbol_B")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+## Read in gene-disease assoc data
+GDA_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto.csv", 
+                      sep = ",", stringsAsFactors = F, header = T) # has isAutoimmune col
+# select disease that have some form of Strong or Weak evidence and have more than 5 disease genes
+GDA_auto = GDA_data %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(hgnc_symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  filter(isAutoimmune == 1) %>%
+  dplyr::select(NewName, hgnc_symbol) %>%
+  unique()
+
+## Read in tissue data
+
+
+# read in autoimmune disease data to get dis with stat signif module
+autoimmune_LCC_df = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs.tsv", 
+                               sep = "\t", stringsAsFactors = F, header = T)
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+
+autoimmune_LCC_df <- autoimmune_LCC_df %>% 
+  mutate(padj = p.adjust(p_val, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05"))
+
+signif_dis <- autoimmune_LCC_df %>%
+  filter(padj < 0.05)
+signif_dis <- signif_dis$Disease
+```
+
+tissues <- unique(tissues2.0_RNA$Tissue_Organ)
+#tissue_LCC = list()
+min_count = 10
+reps = 1000
+pb <- txtProgressBar(min = 0, max = ncol(tissue_matrix), style = 3)
+final_LCCs = list()
+
+for(i in 1:length(tissues)){
+  setTxtProgressBar(pb, i)
+  tiss =  tissues2.0_RNA %>% filter(Tissue_Organ == tissues[i])
+  genes_in_tissue = tiss %>% filter(Unit > min_count)
+  genes_in_tissue = unique(genes_in_tissue$Symbol)
+  genes_in_tissue = genes_in_tissue[genes_in_tissue %in% V(ppi_g)$name]
+  
+  n_genes_tissue = length(genes_in_tissue)
+  
+  tissue_ppi = ppi_g %>% induced_subgraph(., genes_in_tissue)
+  
+  out = list()
+  for(j in 1:length(signif_dis)){
+    genes_disease = GDA_auto %>%
+      filter(NewName %in% signif_dis[j]) %>%
+      filter(hgnc_symbol %in% V(tissue_ppi)$name)
+    n_genes_disease_tissue  = nrow(genes_disease)
+    
+    if(n_genes_disease_tissue > 0){
+      LCC_disease_tissue = NetSci::LCC_Significance(N = reps, 
+                                                    Targets = genes_disease$hgnc_symbol, 
+                                                    G = tissue_ppi,
+                                                    bins = 1
+      )
+      
+      # store data
+      tmp = data.frame(Disease_Name = signif_dis[j], 
+                       Tissue = names(tissue_matrix)[i], 
+                       Tissue_Genes = n_genes_tissue, 
+                       Disease_Tissue_Genes = n_genes_disease_tissue, 
+                       
+                       LCC_size = LCC_disease_tissue$LCC, 
+                       LCC_p = LCC_disease_tissue$emp_p)
+      
+      out[[j]] = tmp
+    } else {
+      
+      tmp = data.frame(Disease_Name = signif_dis[j], 
+                       Tissue = names(tissue_matrix)[i], 
+                       Tissue_Genes = n_genes_tissue, 
+                       Disease_Tissue_Genes = n_genes_disease_tissue, 
+                       
+                       LCC_size = 0, 
+                       LCC_p = 1)
+      
+      out[[j]] = tmp
+    }
+  }  
+  final_LCCs[[i]] = out %<>% bind_rows()
+}
+
+final_LCCs %<>% bind_rows()
+
+```{r}
+get_tissue_
+```
+

@@ -1,0 +1,576 @@
+---
+title: "Rethinking_Reactome"
+author: "Ursula Widocki"
+date: '2022-06-21'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(igraph)
+require(ggraph)
+library(Cairo)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+`%ni%` <- Negate(`%in%`)
+
+gene_human <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/gene_human.csv")
+gene_human <- gene_human[,2:3]
+
+```
+
+
+## get Reactome data
+```{r}
+library(reactome.db)
+reactomeIDs <- reactomePATHNAME2ID # maps Reactome path identifiers to reactomeIDs
+entrezGenes <- reactomePATHID2EXTID # maps reactome IDs to Entrez gene names
+entrez_to_ID <- reactomeEXTID2PATHID
+path_ID_to_name <- reactomePATHID2NAME
+go_to_reactome <- reactomeGO2REACTOMEID
+```
+
+```{r}
+# GO innate: GO:0045087
+
+xx <- c(unique(as.list(reactomeGO2REACTOMEID$`GO:0045087`)))
+#reactome_innate_path <- c(as.list(reactomePATHID2NAME$`R-HSA-168249`)) # pathway name
+ID <- xx[[1]]
+reactome_innate_genes <- entrezGenes[[ID]]
+
+# set up df to store genes and paths
+col_labels <- c("Symbol", "ReactomePathwayInnate", "ReactomePathIDInnate", "ReactomeDB")
+reactome_innate_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(reactome_innate_df) <- col_labels
+
+for(g in reactome_innate_genes){
+    if(g %in% gene_human$GeneID){
+      sym_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+      name_path <- path_ID_to_name[[ID]]
+      new_line <- c(sym_gene, name_path, ID, 1)
+      reactome_innate_df[nrow(reactome_innate_df) + 1,] <- new_line
+      
+    }
+}
+
+reactome_innate_df$isInnateReactome <- 1
+
+```
+
+```{r}
+# GO adaptive: GO:0002250
+
+xx <- c(unique(as.list(reactomeGO2REACTOMEID$`GO:0002250`)))
+ID <- xx[[1]]
+reactome_adaptive_genes <- entrezGenes[[ID]]
+
+# set up df to store genes and paths
+col_labels <- c("Symbol", "ReactomePathwayAdaptive", "ReactomePathIDAdaptive", "ReactomeDB")
+reactome_adapt_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(reactome_adapt_df) <- col_labels
+
+for(g in reactome_adaptive_genes){
+    if(g %in% gene_human$GeneID){
+      sym_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+      name_path <- path_ID_to_name[[ID]]
+      new_line <- c(sym_gene, name_path, ID, 1)
+      reactome_adapt_df[nrow(reactome_adapt_df) + 1,] <- new_line
+      
+    }
+}
+
+reactome_adapt_df$isAdaptiveReactome = 1
+```
+
+```{r}
+# GO general immunity: GO:0006955
+
+xx <- c(unique(as.list(reactomeGO2REACTOMEID$`GO:0006955`)))
+#reactome_other_genes <- entrezGenes[[xx[[1]]]]
+```
+
+```{r}
+reactome_df <- full_join(reactome_innate_df, reactome_adapt_df)
+
+reactome_df$isInnateReactome[is.na(reactome_df$isInnateReactome)] = 0
+reactome_df$isAdaptiveReactome[is.na(reactome_df$isAdaptiveReactome)] = 0
+```
+
+
+
+
+
+# Does Reactome make an LCC?
+```{r}
+# Read in PPI
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+```{r}
+logbin_distribution = function(samples, B){
+  
+  # Remove zeros
+  samples = samples[samples != 0] # samples from the distribution
+  n = length(samples)
+
+  # Bin samples
+  b1 = min(samples)
+  bBp1 = max(samples)
+  b = replicate(B+1, 0) # vector of zeros of length B+1
+
+  for (i in 1:(B+1)){
+     b[i] = b1 * ((bBp1 / b1)^((i-1)/B))
+  }
+   
+  # Get number of points
+  nums = replicate(B, 0) # vector of zeros of length B
+  for(s in samples){
+    for(i in 1:B){
+      if((b[i] <= s) & (s < b[i+1])){
+        nums[i] = nums[i] + 1
+      }
+    }
+    if(s == bBp1){
+      nums[B] = nums[B] + 1
+    }
+  }
+    
+  # Get the probability densities
+  p = replicate(B, 0) # vector of zeros of length B
+  for(i in 1:B){
+    p[i] = nums[i] / (n * (b[i+1] - b[i]))
+  }
+  
+  # Get x-value locations
+  x = c()
+  for(i in 1:B){
+    x[i] = sqrt(b[i] * b[i+1])
+  }
+  
+  result = as.data.frame(x) %>% cbind(., data.frame(p))
+  return(result)
+}
+```
+
+# ReactomeDB LCC
+```{r}
+# ReactomeDB LCC
+library(NetSci)
+react_all <- reactome_df %>%
+  filter(ReactomeDB == 1) %>% 
+  unique()
+react_all <- unique(react_all$Symbol)
+  
+ppi_react_all = react_all[react_all %in% V(ppi_g)$name]
+
+LCC_react_all = LCC_signif(G = ppi_g, targets = ppi_react_all, num_bins_degree_G = 1, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+pdf(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Reactome_LCC_distrib.pdf", height = 6, width = 8)
+lim = c(LCC_react_all$size, LCC_react_all$distribution)
+hist(LCC_react_all$distribution, main = "ReactomeDB Immune System Empirical LCC Distribution", 
+     xlab = "LCC Size", ylab = "LCC Frequency",
+     xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 150), 
+     col = 'gray75', breaks = 20)
+
+abline(v = LCC_react_all$size, col = "red")
+text(LCC_react_all$size, 145, labels = paste0("Observed LCC size = ", LCC_react_all$size), srt=0.2, pos=2.5, col = "red")
+dev.off()
+
+## Degree distribution of genes in the LCC
+react_all_graph <- induced_subgraph(ppi_g, ppi_react_all)
+temp <- components(react_all_graph)$membership
+inLCC_react_all = names(temp[temp == 1])
+
+LCC_react_all_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_react_all) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+testing_df = logbin_distribution(samples = LCC_react_all_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0 ))
+testing_df = testing_df[row_sub,]
+
+p2 <- ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of ReactomeDB Proteins in LCC") +
+  theme(axis.text.x = element_text(size = 15)) +
+  theme_minimal()
+
+## Degree distribution of genes NOT in the LCC
+nonLCC_react_all = names(temp[temp != 1])
+nonLCC_react_all_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_react_all) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+testing_df = logbin_distribution(samples = nonLCC_react_all_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0 ))
+testing_df = testing_df[row_sub,]
+
+p3 <- ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of ReactomeDB Proteins Not in LCC") +
+  theme(axis.text.x = element_text(size = 15)) +
+  theme_minimal()
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Reactome_LCC_distrib_plots.pdf", width = 8, height = 10)
+
+(p2 / p3)
+
+dev.off()
+```
+
+
+
+
+
+
+
+
+# How does Reactome compare to the other databases?
+
+```{r}
+# read in the other immune data
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", 
+                         sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+
+```
+
+```{r}
+go_all = immune_data %>%
+  filter(GO == 1) %>%
+  dplyr::select(Symbol, GO) %>%
+  unique()
+go_all = unique(go_all$Symbol)
+
+kegg_all = immune_data %>%
+  filter(KEGG == 1) %>%
+  dplyr::select(Symbol, KEGG) %>%
+  unique()
+kegg_all = unique(kegg_all$Symbol)
+
+innatedb_all = immune_data %>%
+  filter(InnateDB == 1) %>%
+  dplyr::select(Symbol, InnateDB) %>%
+  unique()
+innatedb_all = unique(innatedb_all$Symbol)
+
+react_all = reactome_df %>%
+  filter(ReactomeDB == 1) %>%
+  dplyr::select(Symbol, ReactomeDB) %>%
+  unique()
+react_all = unique(react_all$Symbol)
+
+fit <- euler(list(GO = go_all, KEGG = kegg_all, InnateDB = innatedb_all, Reactome = react_all))
+plot(fit,
+     fills = list(fill = c("red", "steelblue4", "turquoise3","lightgreen"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T,
+     main = "Database Immunity Sets",
+     shape = "ellipse")
+```
+
+
+# ComplexUpset
+```{r}
+# make dataframe
+all_db_df <- full_join(immune_data, reactome_df, by = "Symbol") %>% dplyr::select(Symbol, GO, KEGG, InnateDB, ReactomeDB,isInnateGO, isAdaptiveGO, isOtherGO, isInnateKEGG, isAdaptiveKEGG, isInnateInnateDB, isInnateReactome, isAdaptiveReactome)
+
+
+
+all_db_df$GO[is.na(all_db_df$GO)] = 0
+all_db_df$KEGG[is.na(all_db_df$KEGG)] = 0
+all_db_df$InnateDB[is.na(all_db_df$InnateDB)] = 0
+all_db_df$ReactomeDB[is.na(all_db_df$ReactomeDB)] = 0
+
+all_db_df$isInnateGO[is.na(all_db_df$isInnateGO)] = 0
+all_db_df$isInnateKEGG[is.na(all_db_df$isInnateKEGG)] = 0
+all_db_df$isInnateInnateDB[is.na(all_db_df$isInnateInnateDB)] = 0
+all_db_df$isInnateReactome[is.na(all_db_df$isInnateReactome)] = 0
+
+all_db_df$isAdaptiveGO[is.na(all_db_df$isAdaptiveGO)] = 0
+all_db_df$isAdaptiveKEGG[is.na(all_db_df$isAdaptiveKEGG)] = 0
+all_db_df$isAdaptiveReactome[is.na(all_db_df$isAdaptiveReactome)] = 0
+
+all_db_df$isOtherGO[is.na(all_db_df$isOtherGO)] = 0
+```
+
+```{r}
+immune_complex_plot <- all_db_df %>% dplyr::select(Symbol, GO, KEGG, InnateDB, ReactomeDB,
+                                                     isInnateGO, isAdaptiveGO, isOtherGO, 
+                                                     isInnateKEGG, isAdaptiveKEGG, isInnateInnateDB,
+                                                     isInnateReactome, isAdaptiveReactome) %>%
+  unique()
+
+immune_complex_plot <- immune_complex_plot[!duplicated(immune_complex_plot), ]
+#rownames(immune_complex_plot) <- immune_complex_plot$Symbol
+databases = c("GO", "KEGG", "InnateDB", "ReactomeDB")
+
+#immune_complex_plot[databases] = immune_complex_plot[databases] == 1
+
+#immune_complex_plot <- immune_complex_plot %>%
+#  select(Symbol, GO, KEGG) 
+
+# transform immune data
+immune_complex_plot$ImmComp <- ifelse((immune_complex_plot$isInnateGO == 1 | immune_complex_plot$isInnateKEGG == 1 | immune_complex_plot$isInnateInnateDB == 1 | immune_complex_plot$isInnateReactome == 1) & (immune_complex_plot$isAdaptiveGO == 0 & immune_complex_plot$isAdaptiveKEGG == 0 & immune_complex_plot$isAdaptiveReactome == 0) & (immune_complex_plot$isOtherGO == 0), "Innate", 
+                                      ifelse((immune_complex_plot$isInnateGO == 0 & immune_complex_plot$isInnateKEGG == 0 & immune_complex_plot$isInnateInnateDB == 0 & immune_complex_plot$isInnateReactome == 0) & (immune_complex_plot$isAdaptiveGO == 1 | immune_complex_plot$isAdaptiveKEGG == 1 | immune_complex_plot$isAdaptiveReactome == 1) & (immune_complex_plot$isOtherGO == 0), "Adaptive",
+                                             ifelse((immune_complex_plot$isInnateGO == 0 & immune_complex_plot$isInnateKEGG == 0 & immune_complex_plot$isInnateInnateDB == 0 & immune_complex_plot$isInnateReactome == 0) & (immune_complex_plot$isAdaptiveGO == 0 & immune_complex_plot$isAdaptiveKEGG == 0 & immune_complex_plot$isAdaptiveReactome == 0) & (immune_complex_plot$isOtherGO == 1), "General",
+                                                    ifelse((immune_complex_plot$isInnateGO == 1 | immune_complex_plot$isInnateKEGG == 1 | immune_complex_plot$isInnateInnateDB == 1 | immune_complex_plot$isInnateReactome == 1) & (immune_complex_plot$isAdaptiveGO == 1 | immune_complex_plot$isAdaptiveKEGG == 1 | immune_complex_plot$isAdaptiveReactome == 1) & (immune_complex_plot$isOtherGO == 0), "Innate&Adaptive", 
+                                                           ifelse((immune_complex_plot$isInnateGO == 1 | immune_complex_plot$isInnateKEGG == 1 | immune_complex_plot$isInnateInnateDB == 1 | immune_complex_plot$isInnateReactome == 1) & (immune_complex_plot$isAdaptiveGO == 0 & immune_complex_plot$isAdaptiveKEGG == 0 & immune_complex_plot$isAdaptiveReactome == 0) & (immune_complex_plot$isOtherGO == 1), "Innate&General",
+                                                                  ifelse((immune_complex_plot$isInnateGO == 0 & immune_complex_plot$isInnateKEGG == 0 & immune_complex_plot$isInnateInnateDB == 0& immune_complex_plot$isInnatereactome == 0) & (immune_complex_plot$isAdaptiveGO == 1 | immune_complex_plot$isAdaptiveKEGG == 1 | immune_complex_plot$isAdaptiveReactome == 1) & (immune_complex_plot$isOtherGO == 1), "Adaptive&General",
+                                                                         ifelse((immune_complex_plot$isInnateGO == 1 | immune_complex_plot$isInnateKEGG == 1 | immune_complex_plot$isInnateInnateDB == 1 | immune_complex_plot$isInnateAdaptive == 1) & (immune_complex_plot$isAdaptiveGO == 1 | immune_complex_plot$isAdaptiveKEGG == 1 | immune_complex_plot$isAdaptiveReactome == 1) & (immune_complex_plot$isOtherGO == 1), "All_Components","None")))))))
+
+```
+
+```{r}
+library(ComplexUpset)
+upset(
+    immune_complex_plot,
+    databases,
+    group_by = "degree",
+    sort_intersections=FALSE,
+    intersections=list(
+        'ReactomeDB',
+        'GO',
+        'KEGG',
+        'InnateDB',
+        
+        c('ReactomeDB', 'KEGG'),
+        c('KEGG','InnateDB'),
+        c('GO', 'InnateDB'),
+        c('InnateDB','ReactomeDB'),
+        c('KEGG','GO'),
+        c('ReactomeDB','GO'),
+        
+        c('ReactomeDB', 'GO','KEGG'),
+        c('ReactomeDB', 'InnateDB','KEGG'),
+        c('ReactomeDB', 'GO','InnateDB'),
+        
+        c('ReactomeDB', 'GO','KEGG','InnateDB')
+    ),
+    base_annotations=list(
+        'Intersection size'=intersection_size(
+            counts=TRUE,
+            mapping=aes(fill=ImmComp),
+            bar_number_threshold = 1
+        )+ scale_fill_manual(values=c(
+            'Innate'='#00AFB5', 
+            'Adaptive'='#FF0054',
+            'Innate&Adaptive'='#9D4EDD', 
+            'General'='#39CB5D',
+            'Innate&General'='#0B4FE1',
+            'Adaptive&General'='#FB5607',
+            'All_Components'= 'black'
+        ))
+    ),
+    width_ratio=0.1,
+    wrap = T,
+    set_sizes=(
+        upset_set_size()
+        + theme(text=element_text(size = 30),
+                axis.text.x=element_text(angle=90),
+                legend.text = element_text(size = 25))
+    ),
+    themes=upset_modify_themes(
+        list(
+            'intersections_matrix' = theme(text=element_text(size=20)),
+            'overall_sizes' = theme(axis.text.x=element_text(size=20)),
+            "default" = theme(text=element_text(size=30))
+        )
+    )
+) + ggtitle('Immune Databases and Immune Components')
+```
+
+
+
+
+# Jaccard Similarity to other databases
+```{r}
+# jaccard similarity between all FOUR databases
+
+jaccard_sim = function(dta){
+  g =  dta %>% graph_from_data_frame(., directed = F)
+  
+  V(g)$type <- bipartite_mapping(g)$type
+  # get the incidence matrix (or adjacency, depending on how the data was structured)
+  A = as_incidence_matrix(g) %>% as.matrix()
+  gg =   (A)  %*% Rfast::transpose(A)
+  
+  names(gg) = colnames(gg) = rownames(A)
+  NORM = matrix(NA, ncol = ncol(gg), nrow = nrow(gg))
+  # Normalize the values
+  ADJ_for_DIS2DIS = gg
+  pb <- txtProgressBar(min = 0, max = (ncol(NORM)), style = 3)
+  for( i in 1:ncol(NORM)){
+    setTxtProgressBar(pb, i)
+    for(j in i:(nrow(NORM))){
+      NORM[i,j] = NORM[j,i] = ADJ_for_DIS2DIS[i,j]/(ADJ_for_DIS2DIS[i,i]+ADJ_for_DIS2DIS[j,j]-ADJ_for_DIS2DIS[i,j])
+    }
+  }
+  close(pb)
+  
+  Genes = diag(gg) %>% as.data.frame()
+  Genes$ID = row.names(Genes)
+  Genes$prop = (Genes$./ sum(Genes$.) )%>% CoDiNA::normalize()
+  Genes$Count = Genes$.
+  Genes = Genes[,-1]
+  # Transform into a edge list
+  rownames(NORM) = colnames(gg)
+  colnames(NORM) = colnames(gg)
+  G = NORM %>% wTO::wTO.in.line() 
+  names(G)[3]="weight"
+  
+  return(G)
+}
+
+```
+
+```{r}
+go_temp = as.data.frame(go_all, stringsAsFactors = F)
+colnames(go_temp) = "Symbol"
+go_temp$Database = "GO"
+
+innatedb_temp = as.data.frame(innatedb_all, stringsAsFactors = F)
+colnames(innatedb_temp) = "Symbol"
+innatedb_temp$Database = "InnateDB"
+
+kegg_temp = as.data.frame(kegg_all, stringsAsFactors = F)
+colnames(kegg_temp) = "Symbol"
+kegg_temp$Database = "KEGG"
+
+react_temp = as.data.frame(react_all, stringAsFactors = F)
+colnames(react_temp) = "Symbol"
+react_temp$Database = "Reactome"
+
+# remove rows that are duplicates
+Data_db = dplyr::bind_rows(go_temp, innatedb_temp) %>% dplyr::bind_rows(., kegg_temp) %>% dplyr::bind_rows(., react_temp)
+Data_db = unique(Data_db)
+Data_db = Data_db[,c("Database", "Symbol")] # make sure order column
+
+jacc_db <- jaccard_sim(Data_db)
+# make sure values are the proper type
+jacc_db$Node.1 <- as.character(jacc_db$Node.1)
+jacc_db$Node.2 <- as.character(jacc_db$Node.2)
+jacc_db$weight <- as.numeric(jacc_db$weight)
+
+jacc_db_g <- graph.data.frame(jacc_db)
+jacc_db_mat <- as.matrix(get.adjacency(jacc_db_g, attr='weight'))
+jacc_db_mat_full <- jacc_db_mat + t(jacc_db_mat) + diag(dim(jacc_db_mat)[1])
+
+
+superheat(jacc_db_mat_full, heat.pal = c("white", "red"), heat.pal.values = c(0, 0.07, 1), X.text = round(jacc_db_mat_full,3), title = "Jaccard Similarity Between Databases")
+
+
+
+
+
+
+g = graph_from_adjacency_matrix(jacc_db_mat_full, mode = "undirected", weighted = TRUE)
+#g = delete.edges(g, E(g)[E(g)$weight == 0])
+
+E(g)$width = E(g)$weight
+V(g)$size = strength(g)
+
+V(g)$color = V(g)$frame.color = "#2a9e8f"
+V(g)$label.color = "#264660"
+E(g)$color = "grey66"
+
+#coord = layout_with_drl(g, weights = E(g)$weight^3)
+#plot(simplify(g), layout = coord)
+
+CairoPDF(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/ImmuneDB_withReact_Jacc_graph.pdf",
+         height = 10,
+         width = 16)
+ggraph(g, 'stress') +
+  geom_edge_hive(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = size, color = "red")) +
+  geom_node_text(aes(label = name),
+                 size = 10, 
+                 nudge_y = 0.08) +
+  scale_edge_width(range = c(1, 3)) +
+  scale_size(range = c(25,27)) +
+  theme_void()
+
+dev.off()
+```
+
+
+
+
+# Separation between Reactome and the other databases
+
+```{r}
+library(NetSci)
+# separation between all FOUR databases
+SAB = separation_Significance(G = ppi_g, 
+                 ST = Data_db)
+#SAB
+Sep = SAB$Sab %>% as.matrix()
+Sep[upper.tri(Sep)] = t(Sep)[upper.tri(Sep)]
+#S = Sep %>% as.matrix()
+#superheat(S, heat.pal = c("mediumblue", "white"), X.text = round(S,3), X.text.col = "white", title = "S_ab Separation Between Database Modules")
+
+SAB[nrow(SAB)+1,] <- c("Reactome", "GO", -0.2852987, 0.9974116993)
+SAB[nrow(SAB)+1,] <- c("Reactome", "KEGG", -0.3468192, 0.8532996689)
+SAB[nrow(SAB)+1,] <- c("Reactome", "InnateDB", -0.2904161, 0.9928077677)
+
+SAB %>%
+  mutate(significance = ifelse(pvalue_lt < 0.05, "Significant", "Not Significant")) %>%
+  ggplot() +
+  aes(x = x, y = y, fill = Sab, colour = significance, label = round(Sab, digits = 3)) +
+  geom_tile(size = 1.2) +
+  geom_text() +
+  scale_color_manual(values = c("Not Significant" = "#FB5607", "Significant" = "#8D99AE")) +
+  theme_minimal() +
+  theme(text = element_text(size = 20))
+
+sep_g = graph_from_adjacency_matrix(S, mode = "undirected", weighted = TRUE)
+sep_g = delete.edges(sep_g, E(sep_g)[E(sep_g)$weight == 0])
+
+E(sep_g)$width = abs(E(sep_g)$weight)
+V(sep_g)$size = strength(sep_g)
+
+V(sep_g)$color = "lightblue"
+V(sep_g)$label.color = "lightblue"
+E(sep_g)$color = "grey66"
+
+#coord = layout_with_drl(sep_g, weights = E(sep_g)$weight^3)
+#plot(simplify(sep_g), layout = coord)
+
+require(ggraph)
+ggraph(sep_g, 'stress') +
+  geom_edge_hive(aes(width = abs(weight), alpha = abs(weight))) +
+  geom_node_point(aes(size = abs(size)*20), colour = "lightblue")+
+  geom_node_text(aes(label = name),
+                size = 9) +
+  scale_edge_width(range = c(0.2, 0.7)) +
+  theme_void()
+
+```
+
+
+
+
+
+

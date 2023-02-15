@@ -1,0 +1,91 @@
+---
+title: "2.0.3.2_Disease_Tissue_LCCs_Tissues2.0"
+author: "Ursula Widocki"
+date: "2/24/2022"
+output: html_document
+---
+
+```{r}
+## Packages
+
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+library(igraph)
+library(superheat)
+library(corrplot)
+library(patchwork)
+library(Cairo)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+```
+
+```{r}
+## Read in data
+
+# PPI
+ppi <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+ppi_df <- ppi[,c("Symbol_A", "Symbol_B")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+# Read in gene-disease assoc data
+GDA_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto.csv", 
+                      sep = ",", stringsAsFactors = F, header = T) # has isAutoimmune col
+# select disease that have some form of Strong or Weak evidence and have more than 5 disease genes
+GDA_auto = GDA_data %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(hgnc_symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  filter(isAutoimmune == 1) %>%
+  dplyr::select(NewName, hgnc_symbol) %>%
+  unique()
+
+
+# Read in tissue data
+tissues2.0 <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/TISSUES2.0_human_tissue_experiments_full.tsv")
+colnames(tissues2.0) <- c("ensID", "Symbol", "BTO_Code", "Tissue_Organ", "Experiment", "Unit", "confidence_score")
+
+
+tissues2.0_RNA <- tissues2.0 %>% filter(Experiment == "RNA-seq") %>% filter(confidence_score > 1) 
+tissues2.0_RNA$Unit <- sub(" RPKM.*", "", tissues2.0_RNA$Unit)
+tissues2.0_RNA$Unit <- as.numeric(tissues2.0_RNA$Unit)
+```
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

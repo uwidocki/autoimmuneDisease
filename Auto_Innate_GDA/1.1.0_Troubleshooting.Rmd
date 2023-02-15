@@ -1,0 +1,260 @@
+---
+title: "1.1.0_Troubleshooting"
+author: "Ursula Widocki"
+date: "6/8/2021"
+output: html_document
+---
+################################################################################
+# Made to examine why separation from diseases are far from adaptive and innate 
+# immune systems
+# 
+################################################################################
+
+
+```{r setup, include=FALSE}
+rm(list = ls())
+```
+
+```{r}
+library(eulerr) # for venn diagrams, maybe try upSetR instead
+library(gprofiler2) # gene enrichment
+library(dplyr)
+library(stringr)
+library(stringdist)
+library(superheat)
+#library(NetSci)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+
+set.seed(123) # for venn diagrams
+```
+
+```{r}
+# Gene-disease association data
+GDA_auto <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto.csv", sep = ",", header = T, stringsAsFactors = F)
+colnames(GDA_auto)[3] <- "Symbol"
+
+# Adaptive immunity genes
+all_adapt_genes_df <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/adaptive_genes_all.tsv", header = T, sep = "\t", stringsAsFactors = F)
+
+# PPI
+ppi_df <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df <- ppi_df[,c("Symbol_A", "Symbol_B")]
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g = ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+```{r}
+
+signif_dis = c("granulomatosis with polyangiitis", "churg Strauss syndrome", "neutropenia", "amyloidosis", "connective tissue diseases", "scleroderma", "arthritis psoriatic", "hepatitis autoimmune", "sarcoidosis", "takayasu ateritis", "myasthenia gravis", "dermatomyositis", "behcet syndrome", "graves disease", "lupus erythematosus systemic", "diabetes mellitus 1", "multiple sclerosis", "arthritis juvenile", "celiac disease", "endometriosis", "psoriasis", "crohn disease", "colitis ulcerative", "cholangitis sclerosing", "hidradentis suppurativa", "idiopathic pulmonary fibrosis", "agammaglobulinemia", "stiff person syndrome")
+
+```
+
+```{r}
+# Check out the adaptive immunity LCC, just in case
+adapts <- as.character(all_adapt_genes_df$Symbol) %>% unique()
+ppi_adapt = adapts[adapts %in% V(ppi_g)$name]
+
+adapt_graph <- induced_subgraph(ppi_g, ppi_adapt)
+temp <- components(adapt_graph)$membership
+inLCC_adapt = names(temp[temp == 1])
+
+#LCC_adapt = LCC_signif(G = ppi_g, targets = ppi_adapt, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+#lim = c(LCC_adapt$size, LCC_adapt$distribution)
+#hist(LCC_adapt$distribution, main = "Adapt. Immunity LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+#abline(v = LCC_adapt$size, col = "red")
+```
+
+```{r}
+# Separation of these diseases and adaptive immunity
+
+keep_dis = GDA_auto[GDA_auto$NewName %in% signif_dis, c("Symbol", "NewName")]
+keep_dis = keep_dis[keep_dis$Symbol %in% V(ppi_g)$name,]
+colnames(keep_dis) = c("Genes", "Label")
+
+# all adaptive immunity genes
+genes_all_adapt <- all_adapt_genes_df$Symbol %>% unique() 
+genes_all_adapt = genes_all_adapt[genes_all_adapt %in% inLCC_adapt]
+all_adapt_df = genes_all_adapt %>% as.data.frame()
+all_adapt_df$Label <- "All adapt."
+colnames(all_adapt_df)[1] = "Genes"
+
+# GO
+go_df <- subset(all_adapt_genes_df, all_adapt_genes_df$GO == "GO.DB")
+genes_go <- go_df[!duplicated(go_df$Symbol), "Symbol"] 
+genes_go = genes_go[genes_go %in% V(ppi_g)$name]
+go_df = genes_go %>% as.data.frame()
+go_df$Label <- "GO"
+colnames(go_df)[1] = "Genes"
+
+# KEGG
+kegg_df <- subset(all_adapt_genes_df, all_adapt_genes_df$KEGG == "KEGG.db")
+genes_kegg <- kegg_df[!duplicated(kegg_df$Symbol), "Symbol"]
+genes_kegg = genes_kegg[genes_kegg %in% V(ppi_g)$name]
+kegg_df = genes_kegg %>% as.data.frame()
+kegg_df$Label <- "KEGG"
+colnames(kegg_df)[1] = "Genes"
+
+# Reactome
+reactome_df <- subset(all_adapt_genes_df, all_adapt_genes_df$ReactomeDB == "ReactomeDB")
+genes_reactome <- reactome_df[!duplicated(reactome_df$Symbol), "Symbol"]
+genes_reactome = genes_reactome[genes_reactome %in% V(ppi_g)$name]
+reactome_df = genes_reactome %>% as.data.frame()
+reactome_df$Label <- "Reactome"
+colnames(reactome_df)[1] = "Genes"
+
+# Bind the gene and labels together
+sep_labels = rbind(keep_dis, all_adapt_df) %>% rbind(., go_df) %>% rbind(., kegg_df) %>% rbind(., reactome_df)
+
+temp_df = sep_labels[,c("Label", "Genes")]
+
+# Calc. Sep.
+all_sep = separation(ppi_g, temp_df)
+
+
+
+sab_all = all_sep$Sab
+sab_all[is.na(sab_all)] <- 0 # make NA 0
+sab_all = sab_all + t(sab_all)
+
+superheat(sab_all, pretty.order.rows = T, pretty.order.cols = T, bottom.label.text.angle = 90, heat.pal = c("blue", "white", "red"), left.label.text.size = 2, bottom.label.text.size = 3, heat.pal.values = c(0, 0.27, 1) )
+```
+```{r}
+from_adap = sab_all[,which(colnames(sab_all) == "All adapt.")]
+
+which(from_adap < 0)
+```
+
+```{r}
+## Read in innate GDA and make a general immunity module
+
+# Adaptive immunity genes
+all_innate_genes_df <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/innate_genes_all.tsv", header = T, sep = "\t", stringsAsFactors = F)
+
+all_adapt_genes_df$InnateDB <- NA
+all_adapt_genes_df$InnateDBpathID <- NA
+
+all_immune = rbind(all_adapt_genes_df, all_innate_genes_df)
+
+```
+
+```{r}
+## all immunity genes
+
+genes_all_immune <- all_immune[!duplicated(all_immune$Symbol), "Symbol"]
+genes_all_immune = genes_all_immune[genes_all_immune %in% V(ppi_g)$name]
+all_immune_label = genes_all_immune %>% as.data.frame()
+all_immune_label$Label <- "All Immune"
+colnames(all_immune_label)[1] = "Genes"
+
+sep_labels = rbind(keep_dis, all_immune_label)
+
+temp_df = sep_labels[,c("Label", "Genes")]
+
+# Calc. Sep.
+all_sep = separation(ppi_g, temp_df)
+
+sab_all = all_sep$Sab
+sab_all[is.na(sab_all)] <- 0 # make NA 0
+sab_all = sab_all + t(sab_all)
+
+superheat(sab_all, pretty.order.rows = T, pretty.order.cols = T, bottom.label.text.angle = 90, heat.pal = c("blue", "white", "red"), left.label.text.size = 2, bottom.label.text.size = 3, heat.pal.values = c(0, 0.27, 1) )
+
+
+```
+
+```{r}
+from_adap = sab_all[,which(colnames(sab_all) == "All Immune")]
+
+which(from_adap < 0)
+```
+
+
+
+
+
+### Now let's try this again with the original GDA data
+```{r}
+GDA_data <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_18122020_ClassFromDisGeNet.csv", sep = ",", header = T, stringsAsFactors = F)
+colnames(GDA_data)[3] <- "Symbol"
+GDA_data = GDA_data %>% filter(Strong > 0 | Weak > 0) %>% mutate(DiseaseName = tolower(DiseaseName)) %>% unique()
+```
+
+```{r}
+signif_dis[which(signif_dis %in% GDA_data$DiseaseName)]
+```
+```{r}
+# Separation of these diseases and adaptive immunity
+
+testing_list = signif_dis[which(signif_dis %in% GDA_data$DiseaseName)]
+
+temp_genes = GDA_data[GDA_data$DiseaseName %in% testing_list, c("Symbol", "DiseaseName")]
+temp_genes = temp_genes[temp_genes$Symbol %in% V(ppi_g)$name,]
+colnames(temp_genes) = c("Genes", "Label")
+
+# all adaptive immunity genes
+genes_all_adapt <- all_adapt_genes_df$Symbol %>% unique() 
+genes_all_adapt = genes_all_adapt[genes_all_adapt %in% inLCC_adapt]
+all_adapt_df = genes_all_adapt %>% as.data.frame()
+all_adapt_df$Label <- "All adapt."
+colnames(all_adapt_df)[1] = "Genes"
+
+
+# Bind the gene and labels together
+sep_labels = rbind(temp_genes, all_adapt_df)
+
+temp_df = sep_labels[,c("Label", "Genes")]
+
+# Calc. Sep.
+all_sep = separation(ppi_g, temp_df)
+
+
+
+sab_all = all_sep$Sab
+sab_all[is.na(sab_all)] <- 0 # make NA 0
+sab_all = sab_all + t(sab_all)
+
+superheat(sab_all, pretty.order.rows = T, pretty.order.cols = T, bottom.label.text.angle = 90, heat.pal = c("blue", "white", "red"), left.label.text.size = 2, bottom.label.text.size = 3, heat.pal.values = c(0, 0.53, 1)  )
+
+#heat.pal.values = c(0, 0.27, 1) 
+```
+
+```{r}
+from_old_adap = sab_all[,which(colnames(sab_all) == "All adapt.")]
+
+which(from_old_adap < 0)
+```
+
+```{r}
+sep_labels = rbind(temp_genes, all_immune_label)
+
+temp_df = sep_labels[,c("Label", "Genes")]
+
+# Calc. Sep.
+all_sep = separation(ppi_g, temp_df)
+
+sab_all = all_sep$Sab
+sab_all[is.na(sab_all)] <- 0 # make NA 0
+sab_all = sab_all + t(sab_all)
+
+superheat(sab_all, pretty.order.rows = T, pretty.order.cols = T, bottom.label.text.angle = 90, heat.pal = c("blue", "white", "red"), left.label.text.size = 2, bottom.label.text.size = 3, heat.pal.values = c(0, 0.52, 1) )
+```
+
+
+
+
+
+
+
+

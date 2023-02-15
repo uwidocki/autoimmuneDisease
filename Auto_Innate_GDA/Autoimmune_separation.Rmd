@@ -1,0 +1,735 @@
+---
+title: "2.0.1_Autoimmune_Disease_LCCs"
+author: "Ursula Widocki"
+date: "8/15/2021"
+output: html_document
+---
+
+###########################################################################################################
+#
+# This markdown computes LCCs of each autoimmune disease
+#
+###########################################################################################################
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+library(igraph)
+library(magrittr)
+library(ggraph)
+library(BiRewire)
+library(superheat)
+library(NetSci)
+source("/Users/ursulawidocki/Desktop/BarabasiLab//NetMedTools.R")
+```
+
+```{r}
+# Read in immunity genes (just in case you want to incorporate them)
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", 
+                        sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+immune_data <- immune_data %>% # remove ReactomeDB
+  select(!c(ReactomePathwayInnate, ReactomePathIDInnate, ReactomeDB, isInnateReactome, ReactomePathwayAdaptive, ReactomePathIDAdaptive, isAdaptiveReactome))
+
+# Read in PPI data
+ppi <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+ppi_df <- ppi[,c("Symbol_A", "Symbol_B")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+GDA_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto.csv", 
+                        sep = ",", stringsAsFactors = F, header = T) # has isAutoimmune col
+# select disease that have some form of Strong or Weak evidence and have more than 5 disease genes
+GDA_auto <- GDA_data %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(hgnc_symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  filter(isAutoimmune == 1) %>%
+  dplyr::select(NewName, hgnc_symbol) %>%
+  unique()
+```
+
+
+# LCCs
+```{r}
+# Computes and Evaluates LCC of each disease
+
+autoimmune_dis_list = unique(GDA_auto$NewName)
+
+col_labels <- c("Disease", "LCCsize", "p_val", "Mean", "SD", "Z", "num_genes")
+autoimmune_LCC_df = data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(autoimmune_LCC_df) = col_labels
+
+# for each disease
+for (dis in autoimmune_dis_list){
+  print(dis)
+  dis_genes = GDA_auto %>% filter(NewName == dis) # get all disease genes
+  dis_genes = dis_genes$hgnc_symbol
+  dis_genes = dis_genes[dis_genes %in% V(ppi_g)$name] # filter for those in PPI
+  
+  LCC_dis = LCC_signif(G = ppi_g, targets = dis_genes, 
+                       num_bins_degree_G = 1, min_bin_degree = 1, iter = 1000)
+  
+  # add info to df
+  new_line <- c(dis, LCC_dis$size, LCC_dis$p_val, LCC_dis$emp_mean, 
+                LCC_dis$emp_SD, LCC_dis$Z, length(dis_genes))
+  autoimmune_LCC_df[nrow(autoimmune_LCC_df) + 1,] <- new_line
+  
+  # print LCC hist
+  #if(LCC_dis$p_val < 0.05){
+  #  lim = c(LCC_dis$size, LCC_dis$distribution)
+  #  hist(LCC_dis$distribution, main = paste0(dis, " Empirical LCC Distribution"), 
+  #      xlim = c(min(lim - 50), max(lim + 50)), col = 'gray75', 
+  #       ylab = "", breaks = 20)
+    
+   # abline(v = LCC_dis$size, col = "red")
+  #}
+  
+  # print degree distribution of LCC genes
+  
+  # print degree distribution of non-LCC genes
+}
+
+autoimmune_LCC_df$LCCsize <- as.numeric(autoimmune_LCC_df$LCCsize)
+autoimmune_LCC_df$p_val <- as.numeric(autoimmune_LCC_df$p_val)
+autoimmune_LCC_df$Mean <- as.numeric(autoimmune_LCC_df$Mean)
+autoimmune_LCC_df$SD <- as.numeric(autoimmune_LCC_df$SD)
+autoimmune_LCC_df$Z <- as.numeric(autoimmune_LCC_df$Z)
+autoimmune_LCC_df$num_genes <- as.numeric(autoimmune_LCC_df$num_genes)
+
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+autoimmune_LCC_df$signif <- ifelse(autoimmune_LCC_df$p_val < 0.1, "signif", "nonsignif")
+autoimmune_LCC_df$LCC_prop <- autoimmune_LCC_df$LCCsize / autoimmune_LCC_df$num_genes
+
+```
+
+```{r}
+# save LCC info so you don't need to run this again...
+
+write.table(autoimmune_LCC_df, file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs.tsv", sep = "\t", row.names = F, col.names = T)
+```
+
+|
+|
+|
+V
+```{r}
+autoimmune_LCC_df = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs.tsv", 
+                        sep = "\t", stringsAsFactors = F, header = T)
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+```
+
+
+```{r}
+# Vizualize the disease LCCs and p-value
+
+autoimmune_LCC_df %<>%
+  arrange(p_val)
+autoimmune_LCC_df$Disease = factor(row.names(autoimmune_LCC_df), 
+                                   levels = row.names(autoimmune_LCC_df))
+
+autoimmune_LCC_df <- autoimmune_LCC_df %>% 
+  mutate(padj = p.adjust(p_val, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05"))
+  
+ggplot(autoimmune_LCC_df %>% dplyr::arrange(padj)) +
+  aes(x = Disease, y = -log10(padj), colour = signif, size = LCCsize) +
+  geom_point(shape = "circle", alpha = 0.5) +
+  scale_size(range = c(0, 10)) +
+  labs(x = "Disease", y = "-log10 adj p-value", title = "Statistical Significance of Autoimmune Disease Modules") +
+  scale_color_manual(values = c("padj < 0.05" = "turquoise3", "padj > 0.05" = "tomato1")) +
+  scale_y_log10() +
+  ggplot2::scale_y_continuous(limits = c(0, 5)) + 
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "bottom") +
+  geom_hline(yintercept = -log10(0.05), color = "red") 
+
+#ggplot(autoimmune_LCC_df %>% dplyr::arrange(p_val)) +
+#  aes(x = Disease, y = p_val, colour = signif, size = LCCsize) +
+#  geom_point(shape = "circle", fill = "#112446", alpha = 0.4) +
+#  labs(x = "Disease", y = "LCC p-value") +
+#  scale_color_hue(direction = 1) +
+#  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "bottom") +
+#  geom_hline(yintercept = 0.1, color = "red")
+
+#ggplot(autoimmune_LCC_df %>% dplyr::arrange(padj)) +
+#  aes(x = Disease, y = -log10(padj), colour = signif, size = LCCsize) +
+#  geom_point(shape = "circle", fill = "#112446", alpha = 0.4) +
+#  labs(x = "Disease", y = "LCC -log10 adjusted p-value", title = "Statistical Significance of Autoimmune Disease Modules") +
+#  scale_color_hue(direction = 1) +
+#  scale_y_log10() +
+#  theme_minimal() +
+#  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "bottom") +
+#  geom_hline(yintercept = -log10(0.05), color = "red")
+
+```
+
+```{r}
+# make viz where size of LCC if proportion of LCCsize/numDisGenes 
+# and maybe even make this its own viz
+
+ggplot(autoimmune_LCC_df %>% dplyr::arrange(padj)) +
+  aes(x = Disease, y = LCC_prop, colour = signif, size = LCC_prop) +
+  geom_point(shape = "circle", fill = "#112446", alpha = 0.5) +
+  scale_color_manual(values = c("padj < 0.05" = "turquoise3", "padj > 0.05" = "tomato1")) +
+  labs(x = "Disease", y = "LCC size / Total Number Disease Genes", title = "Proportion of Disease Genes in LCC per Autoimmune Disease") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "bottom")
+
+```
+
+```{r}
+# make visualization of the number of genes per disease with LCC size as point size
+
+disease_gene_assoc = GDA_auto %>%
+  group_by(NewName) %>%
+  summarize(n = n())
+rownames(disease_gene_assoc) = disease_gene_assoc$NewName
+
+LCC_info <- autoimmune_LCC_df %>% select(Disease, LCCsize)
+colnames(LCC_info)[1] <- "NewName"
+disease_gene_assoc <- merge(disease_gene_assoc, LCC_info, by = "NewName")
+
+disease_gene_assoc %>%
+  arrange(desc(n)) %>%    # First sort by val. This sort the dataframe but NOT the factor levels
+  mutate(NewName=factor(NewName, levels=NewName)) %>%
+  ggplot() +
+  aes(x = NewName, y = n, size = LCCsize) +
+  geom_point(shape = "circle", fill = "tomato1", color = "tomato1", alpha = 0.4) +
+  labs(title = "Number of Disease Genes per Autoimmune Disease", x = "Autoimmune Disease", y = "Number of Disease Genes") +
+  ggplot2::scale_y_continuous(limits = c(0, 415)) + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "bottom")
+```
+
+```{r}
+# Number of diseases with signif modules
+signif_diseases <- autoimmune_LCC_df %>%
+  filter(signif == "padj < 0.05")
+
+length(unique(signif_diseases$Disease))
+```
+
+## Jaccard similarity
+```{r}
+# Jaccard similarity graph with node size as the LCC size
+
+
+
+```
+
+
+
+## Separation between diseases
+
+```{r}
+# From NetSci package
+
+separation_Significance =  function(G,
+                                    ST,
+                                    Threads = 10,
+                                    N = 1000,
+                                    correct_by_target = TRUE){
+  # requires()
+  NetSci.Sep <- new.env()
+  G %<>% extract_LCC()
+  names(ST)[1:2] = c("ID", "Target")
+  ST$Target %<>% as.character()
+  ST %<>% dplyr::filter(Target %in% igraph::V(G)$name)
+
+  if(correct_by_target){
+    ts = unique(ST$Target)
+  } else{
+    ts = igraph::V(G)$name
+  }
+
+  d = ST$ID %>% unique()
+  message("Calculating distances...")
+  all_sps = igraph::distances(G, v = ts, to = ts)
+
+
+  nnodes = nrow(all_sps)
+  nodes_ID = ST %>%
+    dplyr::group_by(ID) %>%
+    dplyr::summarise(n = dplyr::n())
+
+  SAMPLES = list()
+
+
+  NetSci.Sep$nodes_ID = nodes_ID
+  NetSci.Sep$N = N
+  NetSci.Sep$nnodes = nnodes
+  NetSci.Sep$all_sps = all_sps
+
+  NetSci.Sep$ST = ST
+  NetSci.Sep$SAMPLES = SAMPLES
+  NetSci.Sep$d = d
+
+  rm(all_sps)
+  rm(ST)
+  # rm(nodes_ID)
+  rm(N)
+  rm(nnodes)
+  rm(d)
+  rm(SAMPLES)
+
+  #### Include functions from Internal
+  #NetSci.Sep$resample_saa = NetSci:::resample_saa
+  #NetSci.Sep$saa = NetSci:::saa
+  #NetSci.Sep$resample = NetSci:::resample
+  #NetSci.Sep$pvals = NetSci:::pvals
+
+
+  cl = parallel::makeCluster(Threads)
+  #parallel::clusterExport(cl, "resample_saa", envir = NetSci.Sep)
+  #parallel::clusterExport(cl , "saa", envir = NetSci.Sep)
+  #parallel::clusterExport(cl , "resample", envir = NetSci.Sep)
+  #parallel::clusterExport(cl , "pvals", envir = NetSci.Sep)
+
+  #parallel::clusterExport(cl , "nodes_ID", envir = NetSci.Sep)
+  #parallel::clusterExport(cl , "N", envir = NetSci.Sep)
+  #parallel::clusterExport(cl , "nnodes", envir = NetSci.Sep)
+  #parallel::clusterExport(cl , "all_sps", envir = NetSci.Sep)
+  #parallel::clusterExport(cl , "ST", envir = NetSci.Sep)
+  #parallel::clusterExport(cl , "d", envir = NetSci.Sep)
+  #parallel::clusterExport(cl , "SAMPLES", envir = NetSci.Sep)
+  
+  parallel::clusterExport(cl, "resample_saa")
+  parallel::clusterExport(cl , "saa")
+  parallel::clusterExport(cl , "resample")
+  parallel::clusterExport(cl , "pvals")
+
+  parallel::clusterExport(cl , "nodes_ID")
+  parallel::clusterExport(cl , "N")
+  parallel::clusterExport(cl , "nnodes")
+  parallel::clusterExport(cl , "all_sps")
+  parallel::clusterExport(cl , "ST")
+  parallel::clusterExport(cl , "d")
+  parallel::clusterExport(cl , "SAMPLES")
+  message("Starting now.
+          It might take some time, please be patient.")
+
+  MAX = nrow(NetSci.Sep$nodes_ID)
+  tmporary = parallel::clusterApplyLB(cl, 1:MAX,
+                                      NetSci:::resample_saa)
+
+  message("1/4 done.")
+  SAMPLES = list(); saa_stars = list()
+  for(diseases_all in 1:length(tmporary)){
+    SAMPLES[[diseases_all]] = tmporary[[diseases_all]]$SAMPLES
+    saa_stars[[diseases_all]] = tmporary[[diseases_all]]$saa_stars
+  }
+  saa_stars %<>% dplyr::bind_rows()
+
+  NetSci.Sep$SAMPLES = SAMPLES
+  NetSci.Sep$saa_stars = saa_stars
+
+  parallel::clusterExport(cl , "saa_stars", envir = NetSci.Sep)
+  parallel::clusterExport(cl , "SAMPLES", envir = NetSci.Sep)
+
+  message("2/4 done.")
+
+  Sab_tmp  = parallel::clusterApplyLB(cl, 1:nrow(nodes_ID), NetSci:::sab_aux) %>%
+    dplyr::bind_rows()
+
+  Sab_tmp$Saa_Dis = ifelse(is.nan(Sab_tmp$Saa_Dis), Inf, Sab_tmp$Saa_Dis)
+  message("3/4 done.")
+
+  Sab_tmp[is.na(Sab_tmp)] <- Inf
+  NetSci.Sep$Sab_tmp = Sab_tmp
+  # rm(Sab_tmp)
+
+  parallel::clusterExport(cl , "Sab_tmp", envir = NetSci.Sep)
+
+
+  SAB = parallel::clusterApplyLB(cl,
+                                 1:nrow(Sab_tmp),
+                                 NetSci:::SAB_complete) %>%
+    dplyr::bind_rows()
+
+  parallel::stopCluster(cl)
+
+  message("Done.")
+  return(SAB)
+}
+
+extract_LCC = function(g){
+  mem = g %>% igraph::components()
+  mem = mem$membership %>%
+    as.data.frame()
+
+  names(mem) = c("cluster")
+  mem$nodes = row.names(mem)
+
+  keep = mem %>%
+    dplyr::group_by(cluster) %>%
+    dplyr::mutate(n = n()) %>%
+    dplyr::ungroup() %>%
+    dplyr::filter(n == max(n)) %>%
+    dplyr::pull(nodes)
+
+  g %<>% igraph::induced_subgraph(., keep)
+  return(g)
+}
+
+saa = function(g1, g2, sps){
+
+  if (identical(g1,g2)){
+    tmp = sps[g1, g2]
+    diag(tmp) <- Inf
+    tmp = apply(tmp,1,min)
+    tmp = tmp[!is.infinite(tmp)] %>%
+      mean
+  } else{
+    tmp = sps[g1, g2]
+    t1 = apply(tmp,1,min)
+    t2 = apply(tmp,2,min)
+    tmp = c(t1, t2)
+    tmp = tmp[!is.infinite(tmp)] %>%
+      mean
+  }
+  return(tmp)
+}
+
+
+
+resample = function(total,
+                    n){
+  samples = sample(1:total,
+                   size = n,
+                   replace = F)
+  return(samples)
+}
+
+resample_saa = function(i){
+  # require(magrittr)
+  # require(igraph)
+  `%>%`<- magrittr::`%>%`
+  `%<>%`<- magrittr::`%<>%`
+  tmp = list()
+  for(n in 1:N){
+    tmp[[n]] = resample(n = nodes_ID$n[i],
+                        total = nnodes)
+  }
+
+
+  saa_star_tmp = list()
+
+  for(runs in 1:N){
+    saa_star_tmp[[runs]] = saa(tmp[[runs]],
+                               tmp[[runs]],
+                               sps = all_sps)
+  }
+
+  saa_original = ST$Target[ST$ID == d[i]] %>%
+    saa(.,., sps = all_sps)
+
+  # saa_star_tmp %<>% unlist()
+
+  saa_stars = saa_star_tmp %>%
+    unlist() %>%
+    t() %>%
+    as.data.frame()
+
+  saa_stars %<>%
+    dplyr::mutate(Disease = d[i],
+                  Saa_Dis = saa_original)
+
+  SAMPLES = tmp %>%
+    unlist %>%
+    matrix(., nrow = N, byrow = F)
+
+  return(list(saa_stars = saa_stars, SAMPLES = SAMPLES))
+}
+
+# requires = function(){
+#   require(magrittr)
+#   require(igraph)
+#   require(dplyr)
+#   require(parallel)
+# }
+
+SAB_complete = function(i){
+  # require(magrittr)
+  `%>%`<- magrittr::`%>%`
+  `%<>%`<- magrittr::`%<>%`
+  tmp =
+    Sab_tmp[i,1:N] %>%
+    as.numeric %>%
+    NetSci::pvals(., Sab_tmp$Saa_Dis[i])
+
+  pval = tmp$p_lt %>% as.numeric()
+
+  SAB = Sab_tmp[i,] %>%
+    dplyr::select(x,
+                  y,
+                  Sab = Saa_Dis) %>%
+    dplyr::mutate(pvalue_lt = pval)
+
+  return(SAB)
+}
+
+
+sab_aux = function(j){
+  X = 0; Sab_tmp = list()
+  k = j
+  while(k < length(d)){
+    k = k + 1
+    X = X + 1
+    sab_star = list()
+    for(resample_id in 1:N){
+      sab_star[[resample_id]] = saa(SAMPLES[[k]][resample_id,],
+                                    SAMPLES[[j]][resample_id,],
+                                    sps = all_sps)
+    }
+    sab_original =
+      saa(ST$Target[ST$ID == d[j]],
+          ST$Target[ST$ID == d[k]],
+          sps = all_sps)
+
+    tmp2 = sab_star %>%
+      unlist() %>%
+      t %>%
+      as.data.frame() %>%
+      dplyr::mutate(Saa_Dis = sab_original)
+
+    tmp3 = saa_stars %>%
+      dplyr::filter(Disease %in% c(d[j], d[k])) %>%
+      dplyr::select(-Disease) %>%
+      colMeans()
+
+    Sab_tmp[[X]]  = (tmp2 - tmp3) %>%
+      dplyr:: mutate(x = d[j],
+                     y = d[k])
+  }
+  return(Sab_tmp = Sab_tmp %>%
+           dplyr::bind_rows())
+}
+
+```
+
+# calc sep
+```{r}
+# Separation between diseases
+
+Sab = separation(G = ppi_g, 
+                 ST = GDA_auto)
+
+# make a heatmap to just look at the values at hand
+Sep = Sab$Sab %>% as.matrix()
+Sep[lower.tri(Sep)] = t(Sep)[lower.tri(Sep)]
+S = Sep %>% as.matrix()
+superheat(S, pretty.order.rows = T, pretty.order.cols=T, scale=F, 
+          heat.pal = c("mediumblue", "white", "red"), heat.pal.values = c(0, 0.5, 1), 
+          bottom.label.text.angle = 90, bottom.label.text.size = 2, left.label.text.size = 2)
+
+
+# make a graph of those that are close
+S_list = S %>% reshape2::melt()
+S_list %<>% filter(value < 0)
+g_sep = S_list %>%
+  unique() %>%
+  graph_from_data_frame(., directed = F) %>%
+  delete.vertices(., degree(.) == 0 )
+
+V(g_sep)$degree = degree(g_sep)
+E(g_sep)$weight = abs(E(g_sep)$value)
+ggraph(g_sep, 'stress') +
+  geom_edge_hive(aes(width = weight,
+                    alpha = weight)) +
+  geom_node_point(aes(size = degree), color = "tomato1") +
+  geom_node_text(aes(label = name),
+                 size = 3) +
+  scale_edge_width(range = c(0.1, 1)) +
+  theme_void()
+
+```
+
+```{r}
+# calculate significance of separation of all diseases
+# with only stat signif diseases, see chunks below
+
+sep_signif <- NetSci::separation_Significance(ppi_g,
+                                    ST = GDA_auto,
+                                    Threads = 10,
+                                    N = 1000,
+                                    correct_by_target = TRUE)
+
+sep_signif_whole_ppi <- NetSci::separation_Significance(ppi_g,
+                                    ST = GDA_auto,
+                                    Threads = 10,
+                                    N = 1000,
+                                    correct_by_target = F)
+
+#write.table(sep_signif_whole_ppi, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/Autoimmune_Sep_Signif_whole_ppi.tsv", sep = "\t", row.names = F, col.names = T)
+```
+
+```{r}
+sep_signif_whole_ppi <- sep_signif_whole_ppi %>% 
+  mutate(padj = p.adjust(pvalue_lt, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05"))
+
+write.table(sep_signif_whole_ppi, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/Autoimmune_Sep_Signif_whole_ppi.tsv", sep = "\t", row.names = F, col.names = T)
+```
+
+```{r}
+#sep_signif_whole_ppi <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Autoimmune_Sep_Signif_whole_ppi.tsv", sep = "\t", row.names = F, col.names = T)
+```
+
+
+```{r}
+## Separation only between stat signif disease modules
+
+# get stat signif diseases
+stat_signif_diseases <- autoimmune_LCC_df %>%
+  filter(padj < 0.05)
+stat_signif_diseases <- unlist(unique(stat_signif_diseases$Disease))
+
+# Calculate separation between signif diseases
+signif_dis_GDA <- GDA_auto %>%
+  filter(NewName %in% stat_signif_diseases)
+sep_signif_dis <- NetSci::separation_Significance(ppi_g,
+                                    ST = signif_dis_GDA,
+                                    Threads = 5,
+                                    N = 1000,
+                                    correct_by_target = F)
+```
+
+
+```{r}
+## Plot Sab graph with stat signif edges
+
+sep_signif_dis <- sep_signif_dis %>% 
+  mutate(padj = p.adjust(pvalue_lt, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05"))
+
+signif_sep <- sep_signif_dis %>%
+  filter(padj < 0.05)
+signif_sep <- signif_sep %>% select("x", "y", "Sab")
+
+g_sep <- graph.data.frame(signif_sep, directed = F)
+sep_matrix <- get.adjacency(g_sep, sparse = FALSE, attr='Sab')
+g_sep = graph_from_adjacency_matrix(abs(sep_matrix), mode = "undirected", weighted = TRUE)
+
+V(g_sep)$degree = degree(g_sep)
+
+#isolated = which(degree(g_sep) == 0)
+#g_sep = delete.vertices(g_sep, isolated)
+
+# plot
+ggraph(g_sep, "fr") + # "stress"
+  #geom_edge_hive(aes(width = weight,
+  #                  alpha = weight)) +
+  geom_edge_hive() +
+  geom_node_point(aes(size = degree), color = "turquoise3", alpha = 0.7) +
+  geom_node_text(aes(label = name),
+                 size = 3) #+
+  #scale_edge_width(range = c(0.1, 1)) +
+  #scale_color_hue(l  = c(75), c = 35) + 
+  #scale_edge_width(range = c(0, 3))+
+  #scale_size(range = c(2, 8)) + 
+  #theme_void()
+
+```
+
+
+```{r}
+# look at Sab with disease categories
+
+x = GDA_data %>% select(NewName, DescriptorName)
+
+tmp = GDA_data$DescriptorName %>% 
+  stringr::str_split("\\|", simplify = TRUE) %>%
+  as.data.frame()
+x = cbind(x, tmp) %>%
+  pivot_longer(-NewName) %>% 
+  filter(value != "") %>%
+  filter(name != "DescriptorName") %>% 
+  select(-name) %>%
+  unique()
+
+# gets disease category 
+categ_dis = x %>% 
+  group_by(value) %>%
+  mutate(n = n()) %>%
+  ungroup() %>% 
+  group_by(NewName) %>% 
+  mutate(x = max(n)) %>%
+  filter(n == x) %>%
+  select(-c(n,x)) %>%
+  filter(NewName %in% GDA_auto$NewName)
+categ_dis = categ_dis[match(V(g_sep)$name, categ_dis$NewName),]
+
+V(g_sep)$value <- categ_dis$value
+
+g_sep %>%
+  #delete.vertices(V(g_sep)$name %ni% isolated) %>% 
+  ggraph(., 'fr') +
+  geom_edge_hive(aes(width = weight,
+                    alpha = weight)) +
+  geom_node_point(aes(size = degree, color = value)) +
+  geom_node_text(aes(label = name, size = degree * 0.35)) +
+  scale_edge_width(range = c(0.1, 1)) +
+  scale_color_hue(l  = c(75), c = 35) + 
+  #scale_edge_width(range = c(0, 3))+
+  scale_size(range = c(2, 8)) + 
+  theme_void()
+
+```
+
+```{r}
+#signif_dis <- autoimmune_LCC_df %>% filter(signif == "signif")
+#signif_dis <- unique(as.character(signif_dis$Disease))
+
+g_signif_LCC_sep = delete_vertices(g_sep, V(g_sep)$name %ni% signif_dis)
+isolated = which(degree(g_signif_LCC_sep)==0)
+g_signif_LCC_sep = delete.vertices(g_signif_LCC_sep, isolated)
+
+ggraph(g_signif_LCC_sep, 'stress') +
+  geom_edge_hive(aes(width = weight,
+                    alpha = weight)) +
+  geom_node_point(aes(size = degree, color = value)) +
+  geom_node_text(aes(label = name),
+                 size = 3) +
+  scale_edge_width(range = c(0.1, 1)) +
+  scale_color_hue(l  = c(75), c = 35) + 
+  scale_edge_width(range = c(0, 3))+
+  scale_size(range = c(2, 8)) + 
+  theme_void()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

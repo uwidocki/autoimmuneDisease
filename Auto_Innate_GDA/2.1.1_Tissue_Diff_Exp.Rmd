@@ -1,0 +1,210 @@
+---
+title: "2.1.1_Tissue_Diff_Exp"
+author: "Ursula Widocki"
+date: "5/16/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(DESeq2)
+#library(apeglm)
+library(yarn)
+library(biomaRt)
+library(downloader)
+library(yarn)
+library(preprocessCore)
+```
+
+```{r}
+# read in gene expression data and load in the metadata
+phenoFile <- "https://storage.googleapis.com/gtex_analysis_v8/annotations/GTEx_Analysis_v8_Annotations_SampleAttributesDS.txt"
+pheno2File <- "https://storage.googleapis.com/gtex_analysis_v8/annotations/GTEx_Analysis_v8_Annotations_SubjectPhenotypesDS.txt"
+# read in gene expression
+cnts <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GTEx_Analysis_2017-06-05_v8_RNASeQCv1.1.9_gene_reads.gct")
+
+# read in metadata
+message("Downloading and reading files")
+pdFile <- tempfile("phenodat", fileext = ".txt")
+download(phenoFile, destfile = pdFile)
+pd <- read_tsv(pdFile)
+pd <- pd[pd$SAMPID %in% colnames(cnts),] # keep samples in expr data
+
+pd2File <- tempfile("phenodat2", fileext = ".txt")
+download(pheno2File, destfile = pd2File)
+pd2 <- read_tsv(pd2File)
+
+donor_ids <- list()
+i = 1
+for(sample_id in pd$SAMPID){
+  split_list <- unlist(strsplit(sample_id, "-", fixed = TRUE))
+  donor_id <- paste(split_list[1], split_list[2], sep='-')
+  donor_ids[i] <- donor_id
+  i<- i+1
+}
+pd$SUBJID <- unlist(donor_ids)
+# Merge samples and subjects data
+pdfinal <- merge(x = pd, y = pd2, by = "SUBJID", all = FALSE)
+
+# Keep only columns of interest
+pdfinal <- pdfinal[,c("SAMPID", "SUBJID", "SEX", "SMTSD", "SMGEBTCH")]
+
+# Create tissue names without special characters
+#samples_all_df$SMTS.no.sp.char <- gsub(' ', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', samples_all_df$SMTS)))
+pdfinal$sample <- gsub('-', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$SAMPID)))
+pdfinal$subject <- gsub('-', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$SUBJID)))
+pdfinal$tissue <- gsub(' ', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$SMTSD)))
+pdfinal$batch <- gsub('-', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$SMGEBTCH)))
+pdfinal$batch <- gsub(',', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$batch)))
+pdfinal$SEX <- as.factor(pdfinal$SEX)
+
+pdfinal <- as.data.frame(pdfinal)
+row.names(pdfinal) <- pdfinal$sample
+
+#pdfinal <- AnnotatedDataFrame(data.frame(pdfinal))
+```
+
+# Process gene expression
+```{r}
+
+genes <- cnts$Name
+geneNames <- cnts$Description
+cnts <- as.data.frame(cnts)
+cnts = subset(cnts, select=-Name) # removes ENS gene names
+
+# get sum expression of repeated genes
+repeat_genes <- unique(cnts$Description[duplicated(cnts$Description)])
+#temp_cnts <- cnts[which(cnts$Description %in% repeat_genes),]
+repeat_genes_agg = aggregate(.~Description, cnts[cnts$Description %in% repeat_genes,], sum)
+cnts = rbind(cnts[!(cnts$Description %in% repeat_genes),], repeat_genes_agg)
+
+rownames(cnts) <- cnts$Description
+cnts <- subset(cnts, select=-c(Description))
+cnts <- as.matrix(cnts)
+mode(cnts) <- "integer"
+
+# remove genes with 0 count
+throwAway <- which(rowSums(cnts) == 0) 
+cnts <- cnts[-throwAway, ]
+
+# log2 normalize the data
+cnts <- log2(cnts + 1)
+
+colnames(cnts) <- gsub('-', '.', colnames(cnts))
+genes <- sub("\\..*", "", rownames(cnts))
+```
+
+```{r}
+# biomart settings
+#host <- "http://dec2021.archive.ensembl.org"
+#biomart <- "ENSEMBL_MART_ENSEMBL"
+#dataset <- "hsapiens_gene_ensembl"
+#attributes <- c("ensembl_gene_id", "hgnc_symbol", "chromosome_name",
+#                "start_position", "end_position", "gene_biotype")
+
+#message("Creating ExpressionSet")
+pdfinal <- pdfinal[match(colnames(cnts), rownames(pdfinal)),]
+#es <- ExpressionSet(as.matrix(counts))
+#phenoData(es) <- pdfinal
+
+#message("Annotating from biomaRt")
+#es <- annotateFromBiomart(obj = es, genes = genes, host = host,
+#                          biomart = biomart, dataset = dataset, attributes = attributes)
+
+#message("Cleaning up files")
+#unlink(pdFile)
+#unlink(pd2File)
+
+```
+
+
+# Normalize gene counts
+```{r}
+# need to compare what this is doing in 
+groups <- "SMTSD" # by detailed tissue
+if(length(unique(groups))>1){
+      normalizedMatrix <- sapply(unique(groups), function(i) {
+        cnts <- exprs(obj[, which(pData(pdfinal)$our %in% i)])
+        nmat <- normalize.quantiles(cnts)
+        colnames(nmat) <- colnames(cnts)
+        nmat
+      })
+      normalizedMatrix <- Reduce("cbind", normalizedMatrix)
+      normalizedMatrix <- normalizedMatrix[, match(colnames(obj),
+                                                   colnames(normalizedMatrix))]
+    } else {
+      normalizedMatrix <- normalize.quantiles(exprs(obj))
+      colnames(normalizedMatrix) <- colnames(obj)
+    }
+```
+
+
+```{r}
+# norm by tissue
+#tiss_norm <- normalizeTissueAware(es,"SMTSD", normalizationMethod = "quantile")
+tiss_norm <- normalizeTissueAware(es, groups = "SMTSD", normalizationMethod = "quantile")
+plotDensity(tiss_norm,"SMTSD", main=expression('Normalized?'))
+
+# norm by sample
+tiss_subj_norm <- normalizeTissueAware(etiss_norm, groups = "SUBJID", normalizationMethod = "quantile")
+
+
+# filter out lowly expressed genes
+
+```
+
+```{r}
+# extract matrix
+```
+
+
+
+# Differential Expression
+```{r}
+# Set up to run DESeq2
+
+# make the DESeq2 object
+dds <- DESeqDataSetFromMatrix(countData = data_df,
+                              colData = samples_df,
+                              design = ~ tissue + batch + subject + tissue:subject)
+
+dds <- DESeq(dds) # performs many normalizations
+
+# filters lowly expressed genes
+keep = rowSums(counts(dds)) >= 10
+dds = dds[keep,]
+
+# run the differential expression
+resultsNames(dds) # lists the coefficients
+res <- results(dds, name="condition_tissues") # log fold change and Wald test
+res <- lfcShrink(res, coef="condition_tissues", type="apeglm") # reduces noise due to variance
+
+# order results based on adjusted p-value
+resultOrdered = res[order(res$padj),]
+```
+
+# Save results
+```{r}
+write.csv(as.data.frame(resultOrdered), file="DESeq2_DEgenes_Tissue.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

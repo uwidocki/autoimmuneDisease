@@ -1,0 +1,120 @@
+---
+title: "Gene_expression"
+author: "Ursula Widocki"
+date: "2/3/2022"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(GEOquery)
+```
+
+
+## RA 
+# paper found at 
+```{r}
+# read in data
+gene_exp_RA <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GSE117769_ra-counts-matrix-EnsembIDs-GRCh37.p10.txt") # gene data
+rownames(gene_exp_RA) <- gene_exp_RA$V1
+
+
+#gsm <- getGEO(filename=system.file("extdata/GSM11805.txt.gz",package="GEOquery"))
+
+RA_geo_id <- "GSE117769"
+RA_geo <- getGEO(RA_geo_id, GSEMatrix=T)
+show(RA_geo)
+metadata_RA <- pData(RA_geo[[1]]) # sample_info
+
+
+```
+```{r}
+## Match geo patient accession codes to the patient codes in the expression data
+
+# from metadata_RA$title, get everything before ":"
+metadata_RA$pt_code <- sub(":.*", "", metadata_RA$title)
+
+# which code are of RA patients
+length(which(metadata_RA$`phenotype:ch1` == "Rheumatoid arthritis")) # 51
+
+RA_pt_code <- metadata_RA$pt_code[which(metadata_RA$`phenotype:ch1` == "Rheumatoid arthritis")]
+
+```
+
+
+
+```{r}
+# normalize data
+RA_pt_code <- metadata_RA$pt_code[which(metadata_RA$`phenotype:ch1` == "Rheumatoid arthritis")]
+
+
+```
+
+
+
+
+## psoriasis
+```{r}
+psor_geo_id <- "GSE54456"
+psor_geo <- getGEO(psor_geo_id, GSEMatrix=T)
+show(psor_geo)
+metadata_psor <- pData(psor_geo[[1]]) # sample_info
+```
+```{r}
+# type I diabetes
+
+diab_geo_id <- "GSE85531"
+diab_geo <- getGEO(diab_geo_id, GSEMatrix=T)
+show(diab_geo)
+metadata_diab <- pData(diab_geo[[1]]) # sample_info
+```
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

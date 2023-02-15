@@ -1,0 +1,172 @@
+---
+title: "2.1.1.10_hierarch_Tissue_Diff_Exp"
+author: "Ursula Widocki"
+date: '2022-07-01'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(tidymodels)
+library(data.table)
+library(BiocParallel)
+library(broom.mixed)
+library(downloader)
+library(broom.mixed)
+library(lmerTest)
+```
+
+
+
+```{r}
+# read in gene expression data and load in the metadata
+phenoFile <- "https://storage.googleapis.com/gtex_analysis_v8/annotations/GTEx_Analysis_v8_Annotations_SampleAttributesDS.txt"
+pheno2File <- "https://storage.googleapis.com/gtex_analysis_v8/annotations/GTEx_Analysis_v8_Annotations_SubjectPhenotypesDS.txt"
+# read in gene expression
+cnts <- fread("~/Desktop/BarabasiLab/Data/GTEx_Analysis_2017-06-05_v8_RNASeQCv1.1.9_gene_reads.gct")
+
+# read in metadata
+message("Downloading and reading files")
+pdFile <- tempfile("phenodat", fileext = ".txt")
+download(phenoFile, destfile = pdFile)
+pd <- fread(pdFile)
+pd <- pd[pd$SAMPID %in% colnames(cnts),] # keep samples in expr data
+
+pd2File <- tempfile("phenodat2", fileext = ".txt")
+download(pheno2File, destfile = pd2File)
+pd2 <- fread(pd2File)
+
+donor_ids <- list()
+i = 1
+for(sample_id in pd$SAMPID){
+  split_list <- unlist(strsplit(sample_id, "-", fixed = TRUE))
+  donor_id <- paste(split_list[1], split_list[2], sep='-')
+  donor_ids[i] <- donor_id
+  i<- i+1
+}
+pd$SUBJID <- unlist(donor_ids)
+# Merge samples and subjects data
+pdfinal <- merge(x = pd, y = pd2, by = "SUBJID", all = FALSE)
+
+# Keep only columns of interest
+pdfinal <- pdfinal[,c("SAMPID", "SUBJID", "SEX", "SMTSD", "SMGEBTCH")]
+
+# Create tissue names without special characters
+#samples_all_df$SMTS.no.sp.char <- gsub(' ', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', samples_all_df$SMTS)))
+pdfinal$sample <- gsub('-', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$SAMPID)))
+pdfinal$subject <- gsub('-', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$SUBJID)))
+pdfinal$tissue <- gsub(' ', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$SMTSD)))
+pdfinal$batch <- gsub('-', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$SMGEBTCH)))
+pdfinal$batch <- gsub(',', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$batch)))
+#pdfinal$SEX <- as.factor(pdfinal$SEX)
+
+pdfinal <- as.data.frame(pdfinal)
+rownames(pdfinal) <- pdfinal$sample
+```
+
+
+Make sure that the genes are mappable and are in the PPI
+```{r}
+# make sure genes map
+
+gene_map <- fread("~/Desktop/BarabasiLab/Data/multiple_hgnc_dict_set_2022-04-04.txt")
+cnts <- cnts %>%
+  filter(Description %in% gene_map$HGNC_Symbol)
+
+```
+
+```{r}
+# make sure genes are in the PPI
+
+# Read in PPI data
+ppi <- fread('~/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+all_proteins <- unique(c(ppi_df$HGNC_Symbol.1, ppi_df$HGNC_Symbol.2))
+
+cnts <- cnts %>%
+  filter(Description %in% all_proteins)
+```
+
+
+# Process gene expression
+```{r}
+genes <- cnts$Name
+geneNames <- cnts$Description
+cnts <- as.data.frame(cnts)
+# expression matrix with gene symbols and select samples in metadata
+cnts <- cnts[,colnames(cnts) %in% c("Description", pdfinal$SAMPID)] 
+
+# get sum expression of repeated genes
+repeat_genes <- unique(cnts$Description[duplicated(cnts$Description)])
+#temp_cnts <- cnts[which(cnts$Description %in% repeat_genes),]
+repeat_genes_agg = aggregate(.~Description, cnts[cnts$Description %in% repeat_genes,], sum)
+cnts = rbind(cnts[!(cnts$Description %in% repeat_genes),], repeat_genes_agg)
+
+rownames(cnts) <- cnts$Description
+cnts <- subset(cnts, select=-c(Description))
+cnts <- as.matrix(cnts) # now, we need this as a matrix
+mode(cnts) <- "integer"
+
+# remove genes with 0 count
+throwAway <- which(rowSums(cnts) == 0) 
+cnts <- cnts[-throwAway, ]
+
+colnames(cnts) <- gsub('-', '.', colnames(cnts))
+genes <- sub("\\..*", "", rownames(cnts))
+```
+
+```{r}
+pdfinal <- pdfinal %>%
+  dplyr::select(sample, subject, tissue, SMTS)
+```
+
+# Log normalize counts
+```{r}
+
+cnts <- as.data.frame(cnts)
+cnts$Description <- rownames(cnts)
+
+l_counts <- cnts %>%
+  pivot_longer(-Description, names_to = "sample", values_to = "counts") %>%
+  group_by(Description, sample) %>%
+  summarise(counts = sum(counts)) %>%
+  mutate(data = "cnts") %>%
+  dplyr::inner_join(., pdfinal, by = c("sample" = "sample")) %>%
+  ungroup() %>%
+  group_by(sample) %>% 
+  ungroup()
+
+```
+
+```{r}
+fwrite(norm_counts, "~/Desktop/BarabasiLab/Data/tissue_expression_GTEx_normalized.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

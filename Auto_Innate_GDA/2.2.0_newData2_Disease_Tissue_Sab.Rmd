@@ -1,0 +1,260 @@
+---
+title: "2.2.0_Disease_Tissue_Sab"
+author: "Ursula Widocki"
+date: "2022-07-27"
+output: html_document
+---
+
+#################################################################
+# Calculates the Sab between diseases in tissues
+#################################################################
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# import packages
+library(tidyverse)
+library(data.table)
+library(igraph)
+library(ggraph)
+library(NetSci)
+library(magrittr)
+library(stringr)
+library(ggraph)
+#library(CoDiNA)
+
+`%ni%` <- Negate(`%in%`)
+```
+
+```{r}
+# import files
+
+## PPI
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+## Disease genes
+GDA_data = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new2.tsv") # has isAutoimmune col
+# select disease that have some form of Strong or Weak evidence and have more than 5 disease genes
+GDA_auto = GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name) %>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+
+## Tissue
+tissue_data <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GTEx_Diffexpressed_log.csv")
+tissue_data <- tissue_data %>%
+  filter(p_adj < 0.05)
+tissue_data$term <- gsub("SMTSD", "", tissue_data$term)
+
+
+## Read in autoimmune disease data to get dis with stat signif module
+autoimmune_LCC_df = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs_new2.tsv", 
+                               sep = "\t", stringsAsFactors = F, header = T)
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+
+signif_dis <- autoimmune_LCC_df %>%
+  filter(padj < 0.05) %>%
+  pull(Disease)
+
+# Disease-Tissue LCCs
+dis_tiss_LCC_df <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Disease_Tissue_LCCs_GTEx_log_DEgenes2.tsv")
+dis_tiss_LCC_df <- dis_tiss_LCC_df %>% filter(padj < 0.05)
+
+# SAB from whole PPI
+sab_whole_ppi <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Autoimmune_jacc_sep2.tsv")
+sab_whole_ppi %<>% rename(Sab_ppi = Sab) %>% 
+  rename(p_Sab_ppi = p_Sab) %>% 
+  rename(padj_Sab_ppi = padj_Sab) %>% 
+  select(-Jacc) %>% 
+  select(-p_Jacc)
+
+```
+
+
+```{r}
+tissues <- unique(tissue_data$term) # list of tissues
+
+# initiate df to store values
+col_labels <- c("Tissue", "Disease1", "Disease2", "Sab", "p_val")
+dis_tis_sab_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(dis_tis_sab_df) <- col_labels
+
+Sab_result = list()
+
+for(tiss in tissues){
+  
+  # get tissue genes, make sure 
+  tiss_genes <- tissue_data %>% 
+    filter(term == tiss) %>% filter(HGNC_Symbol %in% V(ppi_g)$name)
+  tiss_genes <- c(unique(tiss_genes$HGNC_Symbol))
+  
+  # make tiss_ppi_g
+  tiss_ppi_g <- induced_subgraph(ppi_g, tiss_genes)
+  
+  # get diseases with modules in tissue (p_adj < 0.05 filtered earlier)
+  tiss_LCCs <- dis_tiss_LCC_df %>% filter(Tissue == tiss)
+  dis_in_tiss <- unique(tiss_LCCs$Disease_Name)
+  
+  dis_long <- GDA_auto %>% filter(NewName %in% dis_in_tiss) # list of disease
+
+  if(length(unique(dis_long$NewName)) > 1){
+    Sab_result[[tiss]] <- separation_Significance(G = tiss_ppi_g, 
+                                        ST = dis_long,
+                                        N = 1000,
+                                        correct_by_target = F, # change to F
+                                        Threads = 10) %>%
+    mutate(padj = p.adjust(pvalue_lt)) %>%
+    mutate(tissue = tiss)
+  }
+}
+
+Sab_result %<>% bind_rows()
+  
+```
+
+
+```{r}
+Sab_result %<>% rename(dis1 = x) %>% rename(dis2 = y)
+write.table(Sab_result, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/Disease_Tissue_Sab2.tsv", row.names = F, col.names = T, sep = "\t")
+```
+
+```{r}
+Sab_result <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Disease_Tissue_Sab2.tsv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+########################## Code I am not using
+```{r}
+# tissues <- unique(tissue_data$term) # list of tissues
+# diseases <- signif_dis # list of disease
+# 
+# # initiate df to store values
+# col_labels <- c("Tissue", "Disease1", "Disease2", "Sab", "p_val")
+# dis_tis_sab_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+# colnames(dis_tis_sab_df) <- col_labels
+# 
+# for(tiss in tissues){
+#   
+#   # get tissue genes
+#   tiss_genes <- tissue_data %>% filter(term == tiss) %>% filter(HGNC_Symbol %in% V(ppi_g)$name)
+#   tiss_genes <- c(unique(tiss_genes$HGNC_Symbol))
+#   
+#   # make tiss_ppi_g
+#   tiss_ppi_g <- induced_subgraph(ppi_g, tiss_genes)
+# 
+#   for(i in 1:1){#for(i in 1:(length(diseases)-1)){
+#     dis1 <- diseases[i]
+#     dis1_genes <- GDA_auto %>% filter(NewName == dis1) # get dis1 genes
+#     
+#     # if dis1_genes are not in tissue, list Sab as NA
+#     # go to the next dis, break?
+# 
+#     for(j in i+1:length(diseases)){
+#       dis2 <- diseases[j]
+#       dis2_genes <- GDA_auto %>% filter(NewName == dis2) # get dis2 genes
+#       
+#       # if dis2_genes are not in tissue, list Sab as NA
+#       
+#       
+#       long_data <- rbind(dis1_genes, dis2_genes)
+# 
+#       Sab_result <- separation_Significance(G = tiss_ppi_g, ST = long_data,
+#                               correct_by_target = F,
+#                               Threads = 10)
+# 
+#       # store results in df
+#       new_line <- c(tiss, dis1, dis2, c(Sab_result$Sab), c(Sab_result$pvalue_lt))
+#       dis_tis_sab_df[nrow(dis_tis_sab_df) + 1,] <- new_line
+#     }
+#   }
+# }
+  
+```
+
+```{r}
+# to plot the Sab individually for all disease pairs
+
+#for(pair in disease_pairs){
+#  print(pair)
+#  
+#  temp <- all_sab %>%
+#    filter(dis_pair == pair) 
+#  #filter for significant Sab_ppi
+#  
+#  plot <- ggplot(temp) +
+#    aes(x = Sab) +
+#    geom_histogram(bins = 30L, fill = "#112446") +
+#    geom_vline(xintercept = unique(temp$Sab_ppi), col = "red") +
+#    labs(title = pair, x = "Tissue Sab") +
+#    theme_minimal()
+#  
+#  print(plot)
+#  
+#}
+
+```
+
+```{r}
+# code for making sure the diseases are in the same order as in the ppi sab data for merging
+
+# reorder disease pairs in Sab_result to merge with sab_whole_ppi
+#Sab_result %<>% rename(dis1 = x) %>% rename(dis2 = y)
+#Sab_result$dis_pair <- str_c(Sab_result$dis1,"-", Sab_result$dis2)
+
+#sab_whole_ppi$dis_pair <- str_c(sab_whole_ppi$dis1,"-", sab_whole_ppi$dis2)
+
+## make sure disease pairs are in the same order in both dataframes
+#for(i in 1:nrow(Sab_result)){
+#  temp_pair <- Sab_result$dis_pair[i]
+  
+#  # if this is not corresponding dis1-dis2 in sab_whole_ppi, swap dis1 and dis2
+#  if(temp_pair %ni% sab_whole_ppi$dis_pair){
+#    new_dis1 <- Sab_result$dis2[i]
+#    new_dis2 <- Sab_result$dis1[i]
+#    
+#    Sab_result$dis1[i] <- new_dis1
+#    Sab_result$dis2[i] <- new_dis2
+#    
+#  }
+#}
+#Sab_result$dis_pair <- str_c(Sab_result$dis1,"-", Sab_result$dis2) # remake dis_pair with new order
+```
+
+
+
+
+
+

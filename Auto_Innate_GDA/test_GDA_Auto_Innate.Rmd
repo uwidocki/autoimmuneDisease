@@ -1,0 +1,421 @@
+---
+title: "GDA_Auto_Innate"
+author: "Ursula Widocki"
+date: "5/2/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+#library(dplyr)
+library(MeSH.db)
+library(MeSH.AOR.db)
+library(VennDiagram)
+library(gprofiler2)
+source("/Users/ursulawidocki/Desktop/BarabasiLab//NetMedTools.R")
+```
+
+
+```{r}
+GDA_data <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/GDA_18122020_ClassFromDisGeNet.csv", sep = ",", header = T, stringsAsFactors = F)
+
+all_genes_df <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/all_genes.tsv", header = T, sep = "\t", stringsAsFactors = F)
+
+ppi_df <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df <- ppi_df[,c("Symbol_A", "Symbol_B")]
+ppi_df$value = 1
+ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g %<>% simplify()
+
+#ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  #mutate(Gene = row.names(.))
+```
+
+
+
+### How are innate immunity genes associated with genes involved with autoimmune diseases
+
+```{r}
+cleaned_GDA = GDA_data %>%
+  mutate(DiseaseName = tolower(DiseaseName)) %>%
+  dplyr::select(hgnc_symbol, DiseaseName, DiseaseClass) %>%
+  unique() 
+
+# How many diseases are there # 1248
+
+# How many genes are there # 12968
+
+```
+
+```{r}
+## Filter by Immune System Disease
+
+autoimmune_key <- "D001327"
+
+# gets meshids of autoimmune diseases
+auto_dis_ids <- MeSHDbi::select(MeSH.AOR.db, keys = autoimmune_key, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+auto_dis_ids_2 <- MeSHDbi::select(MeSH.AOR.db, keys = auto_dis_ids$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+auto_dis_ids_3 <- MeSHDbi::select(MeSH.AOR.db, keys = auto_dis_ids_2$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+auto_dis_ids_4 <- MeSHDbi::select(MeSH.AOR.db, keys = auto_dis_ids_3$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+#auto_dis_ids_5 <- select(MeSH.AOR.db, keys = auto_dis_ids_4$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR") # 0
+
+all_terms <- rbind(auto_dis_ids,auto_dis_ids_2) %>% rbind(., auto_dis_ids_3) %>% rbind(., auto_dis_ids_4)
+```
+
+```{r}
+# gets names of autoimmune diseases
+parent_names <- MeSHDbi::select(MeSH.db, keys = all_terms$ANCESTOR, columns = c("MESHTERM"), keytype = "MESHID")
+offspring_names <- MeSHDbi::select(MeSH.db, keys = all_terms$OFFSPRING, columns = c("MESHTERM"), keytype = "MESHID")
+
+all_autodisease_names <- rbind(parent_names, offspring_names) %>% mutate(MESHTERM = tolower(MESHTERM)) %>% unique()
+
+```
+
+```{r}
+# Use names and cleaned_GDA to get genes associated with autoimmune diseases
+
+autoimmune_genes <- cleaned_GDA %>% dplyr::filter(cleaned_GDA$DiseaseName %in% all_autodisease_names$MESHTERM) # 690
+autoimmune_genes$Type <- "Autoimmunity"
+colnames(autoimmune_genes)[1] <- c("Symbol")
+
+innateimmune_genes <- as.data.frame(all_genes_df$Symbol) %>% unique()
+innateimmune_genes$Type <- "Innate Immunity"
+colnames(innateimmune_genes)[1] <-c("Symbol")
+```
+
+# Make a plot looking at the number of diseases each gene is associated with
+```{r}
+auto_genes_disease_freq <- autoimmune_genes %>% 
+  group_by(Symbol) %>% 
+  summarise(DiseaseFreq = n())
+
+auto_genes_disease_freq <- auto_genes_disease_freq %>% 
+  group_by(DiseaseFreq) %>% 
+  summarise(FreqCount = n())
+
+ggplot(auto_genes_disease_freq) +
+  aes(x = DiseaseFreq, y = FreqCount) +
+  geom_point(shape = "circle", size = 4L, colour = "#112446") +
+  labs(
+    x = "Number of Diseases a Gene is Associated With",
+    y = "Number of Genes with Said DIseases Association Frequency"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+
+```{r}
+# Make a venn diagram to look at the overlap
+autos <- autoimmune_genes$Symbol
+innates <- as.character(innateimmune_genes$Symbol)
+
+venn.diagram(
+  x = list(autos, innates),
+  category.names = c("Autoimmunity" , "Innate Immunity"),
+  filename = 'All_Innate_vs_Auto.png',
+  height = 3000, 
+  width = 4000,
+  output=TRUE,
+  main = "Autoimmunity Disease Assoc. Genes with All Innate Immunity"
+)
+```
+
+
+# Overlap using Innate Immunity genes in PPI
+
+```{r}
+ppi_auto <- autos[autos %in% V(ppi_g)$name]
+
+ppi_innate = innates[innates %in% V(ppi_g)$name]
+
+venn.diagram(
+  x = list(ppi_auto, ppi_innate),
+  category.names = c("Autoimmunity" , "Innate Immunity"),
+  filename = 'PPI_Innate_vs_Auto.png',
+  height = 3000, 
+  width = 4000,
+  output=TRUE,
+  main = "In PPI: Autoimmunity Disease Assoc. Genes with Innate Immunity"
+)
+```
+
+# How does the overlap change if we consider only genes in 2 databases?
+
+```{r}
+all_pivot = all_genes_df %>% 
+  dplyr::select(Symbol, GO, InnateDB, KEGG, ReactomeDB)%>% 
+  tidyr::pivot_longer(., - Symbol) %>% 
+  na.exclude()
+```
+
+
+```{r}
+keep_2 = all_pivot %>% 
+  group_by(Symbol) %>% 
+  summarise(n = n()) %>%
+  filter(n >= 2)
+
+keep_2 = unique(keep_2$Symbol)
+keep_2 <- keep_2[keep_2 %in% V(ppi_g)$name]
+
+db2_graph <- induced_subgraph(ppi_g, keep_2)
+temp <- components(db2_graph)$membership
+db2_genes = unique(names(temp[temp == 1]))
+
+venn.diagram(
+  x = list(auto_in_ppi, db2_genes),
+  category.names = c("Autoimmunity" , "Innate Immunity"),
+  filename = 'PPI_LCC_Innate_2DB_vs_Auto.png',
+  height = 3000, 
+  width = 3000,
+  output=TRUE,
+  main = "Autoimmunity Disease Assoc. Genes vs LCC Innate Immunity (Genes in 2 Databases)"
+)
+
+```
+
+# How does the overlap change if we consider only genes in 3 databases?
+
+```{r}
+keep_3 = all_pivot %>% 
+  group_by(Symbol) %>% 
+  summarise(n = n()) %>%
+  filter(n >= 3)
+
+keep_3 = unique(keep_3$Symbol)
+
+keep_3 <- keep_3[keep_3 %in% V(ppi_g)$name]
+
+db3_graph <- induced_subgraph(ppi_g, unique(keep_3))
+temp <- components(db3_graph)$membership
+db3_genes = unique(names(temp[temp == 1]))
+
+venn.diagram(
+  x = list(auto_in_ppi, db3_genes),
+  category.names = c("Autoimmunity" , "Innate Immunity"),
+  filename = 'PPI_LCC_Innate_3DB_vs_Auto.png',
+  height = 3000, 
+  width = 3000,
+  output=TRUE,
+  main = "Autoimmunity Disease Assoc. Genes vs LCC Innate Immunity (Genes in 3 Databases)"
+)
+
+```
+
+# How does the overlap change if we consider only genes in 4 databases?
+
+```{r}
+# for intersect
+keep_4 = all_pivot %>% 
+  group_by(Symbol) %>% 
+  summarise(n = n()) %>%
+  filter(n == 4)
+
+keep_4 = unique(keep_4$Symbol)
+
+keep_4 <- keep_4[keep_4 %in% V(ppi_g)$name]
+
+db4_graph <- induced_subgraph(ppi_g, unique(keep_4))
+temp <- components(db4_graph)$membership
+db4_genes = unique(names(temp[temp == 1]))
+
+venn.diagram(
+  x = list(auto_in_ppi, db4_genes),
+  category.names = c("Autoimmunity" , "Innate Immunity"),
+  filename = 'PPI_LCC_Innate_4DB_vs_Auto.png',
+  height = 3000, 
+  width = 3000,
+  output=TRUE,
+  main = "Autoimmunity Disease Assoc. Genes vs LCC Innate Immunity (Genes in 4 Databases)"
+)
+```
+
+
+# Measure network separation
+
+```{r}
+## All genes in PPI
+
+auto_df = autoimmune_genes[, c("Symbol","Type")]
+#auto_df = auto_df[!duplicated(auto_df),] %>% na.omit()
+
+innate_df <- innateimmune_genes[,c("Symbol","Type")]
+
+all_df = rbind(auto_df, innate_df)
+
+all_sep = module_sep(ppi_g, all_df)
+
+sab_all = all_sep$Sab
+sab_all[is.na(sab_all)] <- 0 # make NA 0
+sab_all = sab_all + t(sab_all)
+
+superheat(sab_all, pretty.order.rows = T, pretty.order.cols = T)
+
+
+```
+
+
+```{r}
+## 2+ Databases
+genes_in_2 <- as.data.frame(keep_2)
+genes_in_2$Type <- "Innate 2+DB"
+colnames(genes_in_2)[1] <- "Symbol"
+
+sep2_df = rbind(auto_df, genes_in_2)
+
+sep2 = module_sep(ppi_g, sep2_df)
+
+sab_2 = sep2$Sab
+sab_2[is.na(sab_2)] <- 0 # make NA 0
+sab_2 = sab_2 + t(sab_2)
+
+superheat(sab_2, pretty.order.rows = T, pretty.order.cols = T)
+```
+
+```{r}
+## 3+ Database
+genes_in_3 <- as.data.frame(keep_3)
+genes_in_3$Type <- "Innate 3+DB"
+colnames(genes_in_3)[1] <- "Symbol"
+
+sep3_df = rbind(auto_df, genes_in_3)
+
+sep3 = module_sep(ppi_g, sep3_df)
+
+sab_3 = sep3$Sab
+sab_3[is.na(sab_3)] <- 0 # make NA 0
+sab_3 = sab_3 + t(sab_3)
+
+superheat(sab_3, pretty.order.rows = T, pretty.order.cols = T)
+
+```
+
+```{r}
+## 4 Databases
+
+genes_in_4 <- as.data.frame(keep_4)
+genes_in_4$Type <- "Innate 4+DB"
+colnames(genes_in_4)[1] <- "Symbol"
+
+sep4_df = rbind(auto_df, genes_in_4)
+
+sep4 = module_sep(ppi_g, sep4_df)
+
+sab_4 = sep4$Sab
+sab_4[is.na(sab_4)] <- 0 # make NA 0
+sab_4 = sab_4 + t(sab_4)
+
+superheat(sab_4, pretty.order.rows = T, pretty.order.cols = T)
+
+```
+
+# What are the genes in the intersect? (Look at their symbol IDs)
+```{r}
+inter = intersect(all_genes_df$Symbol, autoimmune_genes$Symbol)
+
+ind = str_order(
+  inter,
+  decreasing = FALSE,
+  na_last = TRUE,
+  locale = "en",
+  numeric = FALSE,
+)
+
+inter[ind]
+
+## CTLA, HLA, IFI, IFN, IL, MIR, PTPN, TNFRSF
+
+
+```
+
+# What autoimmune diseases are these genes associated with?
+```{r}
+
+intersect_diseases = cleaned_GDA[cleaned_GDA$hgnc_symbol %in% inter,]
+which_diseases = unique(intersect_diseases$DiseaseName)
+print(which_diseases) # 696 diseases / 1248 total diseases
+
+
+```
+
+
+
+
+## What functional pathways are these genes involved in?
+```{r}
+auto_innate_inter = autos[autos %in% innateimmune_genes$Symbol]
+query_inter = unique(auto_innate_inter)
+
+background_auto = unique(autoimmune_genes$Symbol)
+background_innate = as.character(unique(innateimmune_genes$Symbol))
+```
+
+
+# Enrichment using Autoimmune genes as background
+```{r}
+enrich_bg_auto <- gost(query = query_inter, 
+                organism = "hsapiens", ordered_query = FALSE, 
+                multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                measure_underrepresentation = FALSE, evcodes = FALSE, 
+                user_threshold = 0.05, correction_method = "fdr", 
+                domain_scope = "custom", custom_bg = background_auto, 
+                numeric_ns = "", sources = NULL, as_short_link = FALSE)
+```
+
+
+# Enrichment using all innate immunity genes as background
+```{r}
+enrich_bg_innate <- gost(query = query_inter, 
+                organism = "hsapiens", ordered_query = FALSE, 
+                multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                measure_underrepresentation = FALSE, evcodes = FALSE, 
+                user_threshold = 0.05, correction_method = "fdr", 
+                domain_scope = "custom", custom_bg = background_innate, 
+                numeric_ns = "", sources = NULL, as_short_link = FALSE)
+```
+
+
+```{r}
+length(unique(enrich_bg_auto[["result"]][["term_name"]]))
+length(unique(enrich_bg_innate[["result"]][["term_name"]]))
+
+paths_auto = as.data.frame(unique(enrich_bg_auto[["result"]][["term_name"]]))
+paths_innate = as.data.frame(unique(enrich_bg_innate[["result"]][["term_name"]]))
+
+# look at the difference between the two analyses run
+setdiff(unique(enrich_bg_auto[["result"]][["term_name"]]), unique(enrich_bg_innate[["result"]][["term_name"]]))
+
+length(intersect(unique(enrich_bg_auto[["result"]][["term_name"]]), unique(enrich_bg_innate[["result"]][["term_name"]])))
+
+
+## These two outcomes are all the same.
+
+```
+
+# There is something about the genes elimiated going form 3 -> 4 databases, so genes in 3 databases
+```{r}
+# How many genes are only in 3 databases
+
+# Look at the symbol Ids og genes only in 3 data bases
+
+# Enrichment of genes in 3 database
+
+# Using only genes in 3 databases, what is the module separation?
+
+```
+

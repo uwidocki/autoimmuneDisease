@@ -1,0 +1,424 @@
+---
+title: "Aging - Disease Module Detection"
+format: html
+editor: visual
+author: Deisy Morselli Gysi
+---
+
+## Load Data
+
+```{r}
+require(data.table)
+require(dplyr)
+require(tidyverse)
+require(magrittr)
+require(NetSci)
+require(igraph)
+
+
+`%ni%` <- Negate(`%in%`)
+```
+
+```{r}
+
+# GDA
+GDA_data = fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new2.tsv') # has isAutoimmune col
+data <- GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+
+load("/Users/ursulawidocki/Desktop/BarabasiLab/Data/graphs_new.Rdata")
+
+colors = n %>%
+  select(Category_cl,   color) %>% 
+  unique() %>% 
+  unclass()
+
+Gene_dictionary = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/multiple_hgnc_dict_set_2022-04-04.txt")
+```
+
+```{r}
+data_genes = data %>% 
+  left_join(., n, by = c("HGNC_Symbol"="Symbol")) %>% 
+  unique()
+
+
+data_genes %>%
+  group_by(HGNC_Symbol, Disease) %>%
+  summarise(n = n()) %>% 
+  filter(n > 1)
+
+
+summary_genes = data_genes %>%
+  group_by(Category_cl, Disease) %>%
+  summarise(n =n())
+```
+
+```{r}
+cols = as.character(colors$color)
+names(cols) = colors$Category_cl
+
+ggplot(summary_genes) +
+  aes(x = Disease, 
+      y = n, 
+      fill = Category_cl) +
+  geom_col() +
+  scale_fill_manual(values = cols) +
+  coord_flip() +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  labs(x = "Disease", 
+       y = "# Genes", 
+       color = "", 
+       fill = "")
+```
+
+```{r}
+module_genes = data_genes %>% 
+  filter(HGNC_Symbol %in% V(gPPInc)$name) %>% 
+  pivot_wider(names_from = Disease, 
+              values_from = Disease,
+              values_fn = length,
+              values_fill = 0)
+```
+
+```{r}
+N = 1000
+phenotypes = data_genes$Disease %>% 
+  unique()
+out = list()
+for(i in 1:length(phenotypes)){
+  
+  LCC_PPI = data_genes %>%
+    filter(HGNC_Symbol %in% V(gPPI)$name) %>%
+    filter(Disease %in% phenotypes[i]) %>%
+    pull(HGNC_Symbol) %>%
+    LCC_Significance(N = N, 
+                     Targets = ., 
+                     G = gPPI, 
+                     bins = 1)
+  
+  
+  LCC_PPINCI = data_genes %>%
+    filter(HGNC_Symbol %in% V(gPPInc)$name) %>%
+    filter(Disease %in% phenotypes[i]) %>%
+    pull(HGNC_Symbol) %>%
+    LCC_Significance(N = N, 
+                     Targets = ., 
+                     G = gPPInc, 
+                     bins = 1)
+  
+  aux = list()
+  aux[[1]] = data.frame(Phenotype = phenotypes[i],
+                        LCC = LCC_PPI$LCC, 
+                        rLCC = LCC_PPI$rLCC,
+                        p = LCC_PPI$emp_p, 
+                        type = "PPI")
+  
+  aux[[2]] = data.frame(Phenotype = phenotypes[i],
+                        LCC = LCC_PPINCI$LCC, 
+                        rLCC = LCC_PPINCI$rLCC,
+                        p = LCC_PPINCI$emp_p, 
+                        type = "PPI & NCI")
+  out[[i]] = aux %<>% bind_rows()
+}
+```
+
+```{r}
+out %<>% 
+  bind_rows() %>%
+  group_by(type) %>%
+  mutate(padj = p.adjust(p, method = "fdr")) %>%
+  ungroup()
+out 
+```
+
+```{r}
+out %>% 
+  mutate(sign = ifelse(padj < 0.05, "Sign", "Not Sign"))  %>% 
+  
+  ggplot() +
+  aes(
+    x = padj,
+    y = Phenotype,
+    fill = type,
+    colour = type,
+    size = rLCC,
+    shape = sign
+  ) +
+  geom_vline(xintercept = 0.05, size = 1, color = "orange") +
+  geom_vline(xintercept = 0.01, size = 1, color = "red") +
+  
+  geom_point() +
+  scale_shape_manual(values = c("Sign" = 16, "Not Sign" = 1)) + 
+  
+  scale_fill_hue(direction = 1) +
+  scale_color_hue(direction = 1) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+ggplot(out) +
+  aes(x = "", y = LCC, fill = type) +
+  geom_boxplot() +
+  scale_fill_hue(direction = 1) +
+  theme_minimal()
+
+ggplot(out) +
+  aes(x = "", y = rLCC, fill = type) +
+  geom_boxplot() +
+  scale_fill_hue(direction = 1) +
+  theme_minimal()
+```
+
+```{r}
+sab_PPI = data_genes %>%
+  select(Disease, HGNC_Symbol) %>%
+  separation_Significance(G = gPPI, 
+                          ST = ., 
+                          correct_by_target = F, 
+                          N = N)
+gsab_ppi = sab_PPI %>% 
+    filter(pvalue_lt < 0.05) %>%
+    filter(Sab < 0) %>% 
+  mutate(width = abs(Sab) * 5, weight = abs(Sab)) %>%  
+    graph_from_data_frame(., directed = F)
+
+lcc_ppi = out %>%
+  filter(p < 0.05) %>%
+  filter(type %in% "PPI")
+
+gsab_ppi %<>% delete.vertices(., V(.)$name %ni% lcc_ppi$Phenotype)
+
+plot(gsab_ppi, main = "PPI")
+```
+
+```{r}
+sab_PPINCI = data_genes %>%
+  select(Disease, HGNC_Symbol) %>%
+  separation_Significance(G = gPPInc, 
+                          ST = ., 
+                          correct_by_target = F, 
+                          N = N)
+sab_PPINCI
+gsab_ppinci = sab_PPINCI %>% 
+    filter(pvalue_lt < 0.05) %>%
+    filter(Sab < 0) %>% 
+  mutate(width = abs(Sab) * 5, weight = abs(Sab)) %>%  
+    graph_from_data_frame(., directed = F)
+
+lcc_ppinci = out %>%
+  filter(p < 0.05) %>%
+  filter(type %in% "PPI & NCI")
+
+gsab_ppinci %<>% delete.vertices(., V(.)$name %ni% lcc_ppi$Phenotype)
+
+plot(gsab_ppinci, main = "PPI & NCI")
+```
+
+```{r}
+par(mar = c(1,1,4,1), mfrow = c(1,2))
+plot(gsab_ppi, main = "PPI")
+plot(gsab_ppinci, main = "PPI & NCI")
+```
+
+```{r}
+Jaccard = data_genes %>%
+  select(outcome, HGNC_Symbol) %>%
+  Jaccard(.)
+
+Jaccard
+## Modules are close to each other. 
+```
+
+## Visualize the DM
+
+```{r}
+# data_genes
+```
+
+```{r}
+# DM = gPPInc %>%
+#   induced_subgraph(., module_genes$HGNC_Symbol)%>%
+#   as_data_frame(., "edges") %>%
+#   graph_from_data_frame(., directed = F, module_genes) %>%
+#   simplify(., remove.multiple = F, remove.loops = T) %>%
+#   delete.vertices(., degree(.) == 0) %>%
+#   extract_LCC()
+# 
+# ### plot the giant module, but color according to phenotype
+# ###
+# vs = V(DM)
+# E(DM)$eb <- edge.betweenness(DM)
+# E(DM)$width = E(DM)$weight <- E(DM)$eb %>% CoDiNA::normalize()
+# 
+# DM %<>% delete.edges(., E(.)[E(.)$width == 0])
+# 
+# values <- lapply(1:length(vs),
+#                  function(x) c(ifelse(V(DM)$`Aging-GIP1`[x] == 1, 0, 1),
+#                                ifelse(V(DM)$`Aging-GIP1-adj`[x] == 1, 0, 1),
+#                                ifelse(V(DM)$`Frailty-index`[x] == 1, 0, 1),
+#                                ifelse(V(DM)$`GrimAge`[x] ==1, 0, 1),
+#                                ifelse(V(DM)$`HannumAge`[x] ==1, 0, 1),
+#                                ifelse(V(DM)$Healthspan[x] ==1, 0, 1),
+#                                ifelse(V(DM)$`Healthy-aging`[x] ==1, 0, 1),
+#                                ifelse(V(DM)$`HorvathAge`[x] ==1, 0, 1),
+#                                ifelse(V(DM)$Lifespan[x]   ==1, 0, 1),
+#                                ifelse(V(DM)$`Longevity_90th`[x] ==1, 0, 1),
+#                                ifelse(V(DM)$`Longevity_99th`[x] ==1, 0, 1),
+#                                ifelse(V(DM)$Overall_health_rating[x] ==1, 0, 1),
+#                                ifelse(V(DM)$PhenoAge[x] ==1, 0, 1)))
+# 
+# 
+# V(DM)$frame.color = NA
+# V(DM)$size = degree(DM) %>%
+#   CoDiNA::normalize()
+# 
+# V(DM)$size = (V(DM)$size + 0.01)*10
+# 
+# 
+# ll = DM %>%
+#   layout_with_drl(weights = E(.)$eb,
+#                   options = drl_defaults$coarsest) %>%
+#   igraph::norm_coords()
+# 
+# par(mar = c(0,0,0,0))
+# plot(DM,
+#      # vertex.shape="pie",
+#      # vertex.pie=values,
+#      edge.curved = 0.1,
+#      # layout = ll,
+#      # vertex.pie.color=list(colors_phenotypes),
+#      vertex.label.cex= V(DM)$size/10,
+#      vertex.label = V(DM)$name)
+```
+
+DM For each Phenotype
+
+```{r}
+# make_network = function(g, network_type = "PPI", output = out){
+#   vs = V(g)
+#   E(g)$eb <- edge.betweenness(g)
+#   E(g)$width = E(g)$weight <- E(g)$eb %>% CoDiNA::normalize()
+# 
+#   g %<>% delete.edges(., E(.)[E(.)$width == 0])
+# 
+#   E(g)$width = E(g)$width * 5
+# 
+#   values <- lapply(1:length(vs),
+#                    function(x) c(ifelse(V(g)$`Aging-GIP1`[x] == 1, 0, 1),
+#                                  ifelse(V(g)$`Aging-GIP1-adj`[x] == 1, 0, 1),
+#                                  ifelse(V(g)$`Frailty-index`[x] == 1, 0, 1),
+#                                  ifelse(V(g)$`GrimAge`[x] ==1, 0, 1),
+#                                  ifelse(V(g)$`HannumAge`[x] ==1, 0, 1),
+#                                  ifelse(V(g)$Healthspan[x] ==1, 0, 1),
+#                                  ifelse(V(g)$`Healthy-aging`[x] ==1, 0, 1),
+#                                  ifelse(V(g)$`HorvathAge`[x] ==1, 0, 1),
+#                                  ifelse(V(g)$Lifespan[x]   ==1, 0, 1),
+#                                  ifelse(V(g)$`Longevity_90th`[x] ==1, 0, 1),
+#                                  ifelse(V(g)$`Longevity_99th`[x] ==1, 0, 1),
+#                                  ifelse(V(g)$Overall_health_rating[x] ==1, 0, 1),
+#                                  ifelse(V(g)$PhenoAge[x] ==1, 0, 1)))
+# 
+# 
+# 
+#   V(g)$frame.color = NA
+#   # V(g)$size = degree(g) %>%
+#   #   CoDiNA::normalize()
+# 
+#   x = vertex_attr(g, phenotypes[i])
+#   V(g)$g = -log10(ifelse(x == 0, 10 ^ - 60, x)) %>%
+#     CoDiNA::normalize()
+# 
+#   V(g)$size = V(g)$g
+#   V(g)$size = (V(g)$size + 0.3) * 10
+# 
+# 
+#   ll = g %>%
+#     layout_with_fr() %>%
+#     igraph::norm_coords()
+# 
+# 
+#   text = output %>%
+#     filter(type == network_type) %>%
+#     filter(Phenotype == phenotypes[i])
+# 
+#   plot(g,
+#        vertex.shape="pie",
+#        vertex.pie=values,
+#        edge.curved = 0.1,
+#        layout = ll,
+#        vertex.pie.color=list(colors_phenotypes),
+#        vertex.label.cex= V(g)$size/10,
+#        vertex.label = V(g)$name)
+# 
+#   legend("bottom",
+#          fill = colors_phenotypes,
+#          border = colors_phenotypes,
+#          legend = names(colors_phenotypes),
+#          bty = "n",
+#          ncol = 7)
+# 
+#   text$text = sprintf("Graph: %s, LCC: %1.0f (p = %.4f); rLCC: %0.1f",
+#                       text$type, text$LCC, text$p, text$rLCC*100)
+#   title(main = paste(text$Phenotype, " - ", network_type, " \n\n", text$text))
+# 
+#   return(list(graph = g, text = text))
+# }
+```
+
+```{r}
+# Cairo::CairoPDF("../figs/DMs.pdf", width = 15, height = 10)
+# par(mar = c(0,0,4,0), mfrow = c(1,2))
+# k = 0; pheno_list = list()
+# for (i in 1:length(phenotypes)) {
+#   k = k + 1
+#   G = data_genes %>%
+#     filter(HGNC_Symbol %in% V(gPPInc)$name) %>%
+#     filter(outcome %in% phenotypes[i]) %>%
+#     pull(HGNC_Symbol)
+# 
+#   G_ppi = data_genes %>%
+#     filter(HGNC_Symbol %in% V(gPPI)$name) %>%
+#     filter(outcome %in% phenotypes[i]) %>%
+#     pull(HGNC_Symbol)
+# 
+#   PHENO = gPPInc %>%
+#     induced_subgraph(., G)%>%
+#     as_data_frame(., "edges") %>%
+#     graph_from_data_frame(., directed = F, module_genes) %>%
+#     simplify(., remove.multiple = F, remove.loops = T) %>%
+#     delete.vertices(., degree(.) == 0)
+# 
+#   PHENO_PPI = gPPI %>%
+#     induced_subgraph(., G_ppi)%>%
+#     as_data_frame(., "edges") %>%
+#     graph_from_data_frame(., directed = F, module_genes) %>%
+#     simplify(., remove.multiple = F, remove.loops = T) %>%
+#     delete.vertices(., degree(.) == 0)
+# 
+#   ### plot the giant module, but color according to phenotype
+#   ###
+#   pheno_list[[k]] = make_network(g = PHENO,
+#                                  network_type = "PPI & NCI",
+#                                  output = out)
+# 
+#   pheno_list[[k]] = make_network(g = PHENO_PPI,
+#                                  network_type = "PPI",
+#                                  output = out)
+# 
+# }
+# dev.off()
+
+```
+
+```{r}
+name = paste("../out/AutoImmunity_p", p_select,"N",  N,".Rdata",  sep = "_")
+save.image(name)
+sessionInfo()
+```

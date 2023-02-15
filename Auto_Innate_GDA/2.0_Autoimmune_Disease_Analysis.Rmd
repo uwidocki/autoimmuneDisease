@@ -1,0 +1,1539 @@
+---
+title: "2.0_Autoimmune_Disease_Network_Analysis"
+author: "Ursula Widocki"
+date: "8/4/2021"
+output: html_document
+---
+###########################################################################################################
+#
+# This markdown analyzes the Autoimmune disease network as done in Goh et al. 2007
+#
+###########################################################################################################
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+library(igraph)
+library(magrittr)
+library(ggraph)
+library(BiRewire)
+library(superheat)
+library(NetSci)
+library(eulerr)
+library(patchwork)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+```
+
+```{r}
+# Read in immunity genes (just in case you want to incorporate them)
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", 
+                        sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+immune_data <- immune_data %>% # remove ReactomeDB
+  select(!c(ReactomePathwayInnate, ReactomePathIDInnate, ReactomeDB, isInnateReactome, ReactomePathwayAdaptive, ReactomePathIDAdaptive, isAdaptiveReactome))
+
+# Read in PPI data
+ppi <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+ppi_df <- ppi[,c("Symbol_A", "Symbol_B")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+GDA_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto.csv", 
+                        sep = ",", stringsAsFactors = F, header = T) # has isAutoimmune col
+# select disease that have some form of Strong or Weak evidence and have more than 5 disease genes
+GDA_auto <- GDA_data %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(hgnc_symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  filter(isAutoimmune == 1) %>%
+  dplyr::select(NewName, hgnc_symbol) %>%
+  unique()
+```
+
+```{r}
+hypergeom_test = function(success, universe_success, universe_failure, size_collected){
+  phyper(q = success, m = universe_success, 
+         n = universe_failure, k = size_collected, 
+         lower.tail = TRUE, log.p = FALSE)
+}
+
+logbin_distribution = function(samples, B){
+  
+  # Remove zeros
+  samples = samples[samples != 0] # samples from the distribution
+  n = length(samples)
+
+  # Bin samples
+  b1 = min(samples)
+  bBp1 = max(samples)
+  b = replicate(B+1, 0) # vector of zeros of length B+1
+
+  for (i in 1:(B+1)){
+     b[i] = b1 * ((bBp1 / b1)^((i-1)/B))
+  }
+   
+  # Get number of points
+  nums = replicate(B, 0) # vector of zeros of length B
+  for(s in samples){
+    for(i in 1:B){
+      if((b[i] <= s) & (s < b[i+1])){
+        nums[i] = nums[i] + 1
+      }
+    }
+    if(s == bBp1){
+      nums[B] = nums[B] + 1
+    }
+  }
+    
+  # Get the probability densities
+  p = replicate(B, 0) # vector of zeros of length B
+  for(i in 1:B){
+    p[i] = nums[i] / (n * (b[i+1] - b[i]))
+  }
+  
+  # Get x-value locations
+  x = c()
+  for(i in 1:B){
+    x[i] = sqrt(b[i] * b[i+1])
+  }
+  
+  result = as.data.frame(x) %>% cbind(., data.frame(p))
+  return(result)
+}
+
+```
+
+
+# First, look at the data
+
+```{r}
+# How many disease genes each autoimmune disease has
+
+disease_gene_assoc = GDA_auto %>%
+  group_by(NewName) %>%
+  summarize(n = n())
+rownames(disease_gene_assoc) = disease_gene_assoc$NewName
+
+# Examine number of disease genes per autoimmune disease
+disease_gene_assoc %<>%
+  arrange((n))
+disease_gene_assoc$NewName = factor(row.names(disease_gene_assoc), levels = row.names(disease_gene_assoc))
+ggplot(disease_gene_assoc) +
+  aes(x = NewName, y = n) +
+  geom_point(shape = "circle", fill = "tomato1", color = "tomato1", alpha = 0.4) +
+  labs(title = "Number of Disease Genes per Autoimmune Disease", x = "Autoimmune Disease", y = "Number of Disease Genes") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# Add in Immune System Diseases
+
+GDA_immune = dplyr::filter(GDA_data, grepl('Immune System Diseases', DescriptorName)) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(hgnc_symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  filter(isAutoimmune == 0) %>%
+  dplyr::select(NewName, hgnc_symbol) %>%
+  filter(NewName != "autoimmune diseases") %>%
+  filter(NewName != "immune system diseases") %>%
+  unique()
+## Note not all autoimmune diseases have an Immune System Disease by MeSH terms
+
+immunedis_gene_assoc = GDA_immune %>%
+  group_by(NewName) %>%
+  summarize(n = n())
+rownames(immunedis_gene_assoc) = immunedis_gene_assoc$NewName
+
+immunedis_gene_assoc %<>%
+  arrange(desc(n))
+immunedis_gene_assoc$NewName = factor(row.names(immunedis_gene_assoc), levels = row.names(immunedis_gene_assoc))
+ggplot(immunedis_gene_assoc) +
+  aes(x = NewName, y = n) +
+  geom_point(shape = "circle", fill = "tomato1", color = "turquoise3", alpha = 0.4) +
+  labs(title = "Number of Disease Genes per Immune System Disease (sins Autoimmune Diseases)", x = "Immune System Disease", y = "Number of Disease Genes") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+
+```
+```{r}
+# Vertical Num Disease Genes per Disease plot
+ggplot(disease_gene_assoc) +
+  aes(x = NewName, y = n) +
+  geom_point(shape = "circle", fill = "tomato1", color = "tomato1", alpha = 0.4) +
+  labs(title = "Number of Disease Genes per Autoimmune Disease", x = "Autoimmune Disease", y = "Number of Disease Genes") +
+  
+  theme_minimal() +
+  theme(text = element_text(size = 15)) +
+  #theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip()
+
+```
+
+
+```{r}
+# add Immune System diseases in with 
+
+disease_gene_assoc$DiseaseType <- "Autoimmune"
+immunedis_gene_assoc$DiseaseType <- "OtherImmune"
+all_disease_assoc <- rbind(disease_gene_assoc, immunedis_gene_assoc)
+rownames(all_disease_assoc) <- all_disease_assoc$NewName
+
+all_disease_assoc %<>%
+  arrange(desc(n))
+all_disease_assoc$NewName = factor(row.names(all_disease_assoc), levels = row.names(all_disease_assoc))
+rownames(all_disease_assoc) <- all_disease_assoc$NewName
+
+ggplot(all_disease_assoc) +
+  aes(x = NewName, y = n, color = DiseaseType) +
+  geom_point(shape = "circle", alpha = 0.4) +
+  labs(title = "Number of Disease Genes per Autoimmune and Immune System Disease", x = " Disease", y = "Number of Disease Genes") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+# Plot autoimmune diseases first and then immune diseases
+all_disease_assoc$NewName = factor(row.names(all_disease_assoc), 
+                                   levels = c(disease_gene_assoc$NewName, immunedis_gene_assoc$NewName))
+rownames(all_disease_assoc) <- all_disease_assoc$NewName
+
+# plot num dis genes of autoimmune diseases first, and then immune system diseases
+ggplot(all_disease_assoc) +
+  aes(x = NewName, y = n, color = DiseaseType) +
+  geom_point(shape = "circle", alpha = 0.4) +
+  labs(title = "Number of Disease Genes per Autoimmune and Immune System Disease", x = " Disease", y = "Number of Disease Genes") +
+  scale_x_discrete(limit = c(GDA_auto$NewName, GDA_immune$NewName)) + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+```{r}
+disease_gene_freq = disease_gene_assoc %>%
+  group_by(n) %>%
+  summarize(freq = n())
+ggplot(disease_gene_freq) + 
+  aes(x = n, y = freq) +
+  geom_point(shape = "circle", fill = "tomato1", color = "tomato1", alpha = 0.4) +
+  labs(title = "Frequency of Disease Genes per Autoimmune Disease", x = "Number of Assoc. Genes per Disease", y = "Number of Diseases with X-many Assoc. Genes") +
+  theme_minimal()
+```
+
+
+
+```{r}
+# How many diseases each autoimmune disease gene is assoc with
+gene_assoc = GDA_auto %>%
+  group_by(hgnc_symbol) %>%
+  summarize(n = n())
+rownames(gene_assoc) = gene_assoc$hgnc_symbol
+
+gene_assoc %<>%
+  arrange(n) # was arrange(desc(n))
+gene_assoc$hgnc_symbol = factor(row.names(gene_assoc), levels = row.names(gene_assoc))
+ggplot(gene_assoc) +
+  aes(x = hgnc_symbol, y = n) +
+  geom_point(shape = "circle", fill = "turquoise3", color = "turquoise3", alpha = 0.4) +
+  labs(title = "Number of Autoimmune Diseases per Disease Gene", x = "Gene", y = "Number of Autoimmune Diseases") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+gene_assoc %>% filter(n > 5) %>%
+  ggplot() +
+  aes(x = hgnc_symbol, y = n) +
+  geom_point(shape = "circle", fill = "turquoise3", color = "turquoise3", alpha = 0.4) +
+  labs(title = "Number of Autoimmune Diseases per Disease Gene", x = "Gene", y = "Number of Autoimmune Diseases") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# same plot but vertical
+gene_assoc %<>%
+  arrange(n)
+gene_assoc %>% filter(n > 6) %>%
+  ggplot() +
+  aes(x = hgnc_symbol, y = n) +
+  geom_point(shape = "circle", fill = "turquoise3", color = "turquoise3", alpha = 0.4) +
+  labs(title = "Number of Autoimmune Diseases per Disease Gene", x = "Gene", y = "Number of Autoimmune Diseases") +
+  theme_minimal() +
+  #theme(axis.text.x = element_text(hjust=0)) +
+  #theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip() #+
+  #theme(axis.text.y = element_text(hjust=0))
+  
+
+```
+
+```{r}
+# number of genes assoc with one diseases
+dim(gene_assoc %>% filter(n == 1))[1] # 1353
+
+dim(gene_assoc %>% filter(n == 2))[1] # 230
+
+# number of genes assoc with multiple diseases
+dim(gene_assoc %>% filter(n > 1))[1] # 539
+
+# number of genes with multiautoimmune syndrome potential
+dim(gene_assoc %>% filter(n >= 3))[1] # 309
+
+dim(gene_assoc %>% filter(n >= 7))[1] # 77
+
+```
+
+
+```{r}
+# Jaccard similarity of diseases
+
+jacc_dis = NetSci::Jaccard(GDA_auto)
+jacc_dis$Node.1 <- as.character(jacc_dis$Node.1)
+jacc_dis$Node.2 <- as.character(jacc_dis$Node.2)
+jacc_dis$Jaccard.Index <- as.numeric(jacc_dis$Jaccard.Index)
+
+jacc_dis_g <- graph.data.frame(jacc_dis)
+jacc_dis_mat <- as.matrix(get.adjacency(jacc_dis_g, attr='Jaccard.Index'))
+jacc_dis_mat_full <- jacc_dis_mat + t(jacc_dis_mat) + diag(dim(jacc_dis_mat)[1])
+
+superheat(jacc_dis_mat_full, pretty.order.rows = T, pretty.order.cols=T, scale=F, 
+          heat.pal = c("white", "red"), heat.pal.values = c(0, 0.07, 1), 
+          bottom.label.text.angle = 90, bottom.label.text.size = 2, left.label.text.size = 2)
+
+# Show Jacc as a graph
+g_jacc = graph_from_adjacency_matrix(jacc_dis_mat_full, mode = "undirected", weighted = TRUE)
+Isolated = which(strength(g_jacc) == 2)
+g_jacc = delete.vertices(g_jacc, Isolated)
+
+E(g_jacc)$width = E(g_jacc)$weight
+V(g_jacc)$size = strength(g_jacc)
+V(g_jacc)$label.color = "#264660"
+E(g_jacc)$color = "grey66"
+
+Isolated = which(degree(g_jacc) == 0)
+g_jacc = delete.vertices(g_jacc, Isolated)
+
+#require(ggraph)
+#ggraph(g_jacc, 'stress') +
+#  geom_edge_hive(aes(width = weight, alpha = weight)) +
+#  geom_node_point(aes(size = size), color = "tomato3") +
+#  geom_node_text(aes(label = name, size = size),
+#                 ) +
+#  scale_edge_width(range = c(0.2, 1)) +
+#  theme_void()
+```
+
+
+```{r}
+# Statistical signif of overlaps
+
+disease_pairs <- unique(GDA_auto$NewName)
+col_labels <- c("dis1", "dis2", "weight")
+hyper_dis_df <- data.frame(matrix(ncol = 3, nrow = 0))
+colnames(hyper_dis_df) <- col_labels
+
+for(i in 1:(length(disease_pairs)-1)){
+  for(j in (i+1):length(disease_pairs)){
+    
+    genes_i <- unique(GDA_auto[which(GDA_auto$NewName == disease_pairs[i]),][2])
+    genes_j <- unique(GDA_auto[which(GDA_auto$NewName == disease_pairs[j]),][2])
+    all_genes <- unique(rbind(genes_i, genes_j))
+    
+    universe_success <- intersect(genes_i, genes_j)
+    q <- dim(universe_success)[1] / dim(all_genes)[1]
+    universe_failure <- all_genes[!(all_genes %in% universe_success)]
+    size_collected <- dim(all_genes)[1]
+    
+    temp <- c(disease_pairs[i], disease_pairs[j], 
+              Hypergeometric.test(q, dim(universe_success)[1], dim(universe_failure)[1], size_collected))
+    hyper_dis_df[nrow(hyper_dis_df)+1,] <- temp
+    
+  }
+}
+
+hyper_dis_df$dis1 <- as.character(hyper_dis_df$dis1)
+hyper_dis_df$dis2 <- as.character(hyper_dis_df$dis2)
+hyper_dis_df$weight <- as.numeric(hyper_dis_df$weight)
+```
+
+```{r}
+# Remove edges that are not signif
+
+# make hyper_dis_df into a graph
+signif_link <- hyper_dis_df %>% filter(weight < 0.05) %>% select(dis1, dis2)
+hyper_g <- graph_from_edgelist(as.matrix(signif_link), directed = F)
+
+# get edges
+gsize(hyper_g)
+keep_edges = E(hyper_g)
+
+# keep edges from jacc_dis_g that are in hyper_g
+g_jacc_signif <- subgraph.edges(g_jacc, eids = which(E(g_jacc) %in% E(hyper_g)), delete.vertices = TRUE)
+gsize(g_jacc_signif)
+
+E(g_jacc_signif)$width = E(g_jacc_signif)$weight
+V(g_jacc_signif)$size = strength(g_jacc_signif)
+V(g_jacc_signif)$label.color = "#264660"
+E(g_jacc_signif)$color = "grey66"
+
+require(ggraph)
+ggraph(g_jacc_signif, 'stress') +
+  geom_edge_hive(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = size), color = "tomato3") +
+  geom_node_text(aes(label = name, size = size)) +
+  scale_edge_width(range = c(0.2, 1)) +
+  theme_void()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Enrichment Analysis
+What are the immune pathways these diseases have in common? Are they disease-specific or involved in generally immunity?
+```{r}
+##  psoriasis, Crohn disease, UC, Sclerosing cholangitis
+
+# genes these diseases have in common
+
+library(gprofiler2) # gene enrichment
+
+clust1_dis <- c("colitis ulceratice", "psoriasis", "crohn disease", "cholangitis sclerosing")
+clust1 <- GDA_auto %>%
+  filter(NewName %in% clust1_dis)
+query_genes = unique(clust1$hgnc_symbol)
+background_genes = unique(immune_data$Symbol) # all immunity genes
+sources = c("GO:BP", "GO:MF", "GO:CC", "KEGG")
+
+# domain_scope = "custom" or "custom_annotated"
+# custom_bg = # parameter for custom background set
+enrich_inter <- gost(query = query_genes, 
+                organism = "hsapiens", ordered_query = FALSE, 
+                multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                measure_underrepresentation = FALSE, evcodes = FALSE, 
+                user_threshold = 0.05, correction_method = "fdr", 
+                domain_scope = "custom", custom_bg = background_genes, 
+                numeric_ns = "", sources = sources, as_short_link = FALSE)
+
+enrich_clust1_df <- enrich_inter$result %>% mutate(term_name = tolower(term_name))
+
+```
+
+```{r}
+## next, RA, type I diabetes, MS, celiac disease
+
+# genes these diseases have in common
+clust2_dis <- c("arthitis rheumatoid", "diabetes mellitus type 1", "multiple sclerosis", "celiac disease")
+clust2 <- GDA_auto %>%
+  filter(NewName %in% clust2_dis)
+query_genes = unique(clust2$hgnc_symbol)
+background_genes = unique(immune_data$Symbol) # all immunity genes
+sources = c("GO:BP", "GO:MF", "GO:CC", "KEGG")
+
+# domain_scope = "custom" or "custom_annotated"
+# custom_bg = # parameter for custom background set
+enrich_inter <- gost(query = query_genes, 
+                organism = "hsapiens", ordered_query = FALSE, 
+                multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                measure_underrepresentation = FALSE, evcodes = FALSE, 
+                user_threshold = 0.05, correction_method = "fdr", 
+                domain_scope = "custom", custom_bg = background_genes, 
+                numeric_ns = "", sources = sources, as_short_link = FALSE)
+
+enrich_clust2_df <- enrich_inter$result %>% mutate(term_name = tolower(term_name))
+
+```
+
+
+
+jacc_dis$Node.1 <- as.character(jacc_dis$Node.1)
+jacc_dis$Node.2 <- as.character(jacc_dis$Node.2)
+jacc_dis$Jaccard.Index <- as.numeric(jacc_dis$Jaccard.Index)
+
+jacc_dis_g <- graph.data.frame(jacc_dis)
+jacc_dis_mat <- as.matrix(get.adjacency(jacc_dis_g, attr='Jaccard.Index'))
+jacc_dis_mat_full <- jacc_dis_mat + t(jacc_dis_mat) + diag(dim(jacc_dis_mat)[1])
+
+# Show Jacc as a graph
+g_jacc = graph_from_adjacency_matrix(jacc_dis_mat_full, mode = "undirected", weighted = TRUE)
+
+
+
+
+
+
+
+
+
+
+# Analyze the bipartite network
+
+```{r}
+# Make bipartite network of autoimmune diseases
+
+g = graph_from_edgelist(as.matrix(GDA_auto), directed = F)
+```
+
+```{r}
+# Look at the disease projection of the graph
+
+#bipartite.mapping(g)
+V(g)$type <- bipartite_mapping(g)$type
+E(g)$weight <- 1
+V(g)$degree = degree(g)
+
+# Get the individual projections in the autoimmune disease network
+
+# get the disease projection 
+g_dis = bipartite_projection(g, multiplicity = T, which = "false")
+
+# get the gene projection
+g_gene = bipartite_projection(g, multiplicity = T, which = "true")
+
+```
+
+```{r}
+# Looking at components
+
+components(g_dis)$csize
+
+components(g_gene)$csize
+```
+
+```{r}
+# Degree Distributions
+
+dis_degree_df = data.frame(Degree = degree(graph = g_dis)) %>%
+  mutate(Disease = rownames(.))
+dis_degree_df %<>%
+  arrange(desc(Degree))
+dis_degree_df$Disease = factor(row.names(dis_degree_df), levels = row.names(dis_degree_df))
+
+
+ggplot(dis_degree_df %>% dplyr::arrange(desc(Degree))) +
+  aes(x = Disease, y = Degree) +
+  geom_point(shape = "circle", fill = "tomato1", color = "tomato1", alpha = 0.4) +
+  labs(x = "Disease", y = "Degree", title = "Number of Diseases Each Autoimmune Disease Shares Associated Genes") +
+  scale_color_hue(direction = 1) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+```{r}
+# Visualize the disease network
+
+temp <- components(g_dis)$membership
+dis_LCC = names(temp[temp == 1])
+g_dis_LCC = subgraph(g_dis, dis_LCC)
+V(g_dis_LCC)$size = strength(g_dis_LCC) * 50
+
+g_dis_LCC %>%
+  ggraph(., 'fr') +
+  # incorp strength()
+  geom_edge_link(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = degree), fill = "tomato1", colour = "tomato1"
+                  ) + 
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     size = degree*0.2)
+                 ) +
+  labs(
+    degree = "# genes assoc with disease",
+    weight = "# of genes in both diseases"
+       ) +
+  scale_color_hue(l  = c(10), c = 20) +
+  scale_size(range = c(2, 8)) + 
+  theme_void()
+
+# viz disease graph filtering by number of diseases a disease is connected to
+twent5_dis = rownames(dis_degree_df)[which(dis_degree_df$Degree > 25)]
+
+g_dis_LCC %>%
+  delete_vertices(V(g_dis_LCC)$name %ni% twent5_dis) %>%
+  ggraph(., 'fr') +
+  geom_edge_link(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = degree), fill = "tomato1", colour = "tomato1") + 
+  geom_node_text(aes(label = name, size = degree*0.2)) +
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  
+  scale_color_hue(l  = c(10), c = 20) +
+  scale_size(range = c(2, 8)) + 
+  theme_void() +
+  labs(
+    degree = "# genes assoc with disease",
+    weight = "# of genes in both diseases"
+       )
+```
+
+```{r}
+# Degree distribution of disease network
+dis_degree_df = as.data.frame(degree(g_dis)) #%>%
+colnames(dis_degree_df) = "Degree"
+dis_degree_df = dis_degree_df %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+ggplot(dis_degree_df) +
+  aes(x = Degree, y = n) +
+  geom_point(shape = "circle", size = 1.5, colour = "tomato1") +
+  labs(title = "Degree Distribution of Diseases in ADN") +
+  theme_minimal()
+
+# Degree distribution of disease network
+gene_degree_df = as.data.frame(degree(g_gene)) #%>%
+colnames(gene_degree_df) = "Degree"
+gene_degree_df = gene_degree_df %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+ggplot(gene_degree_df) +
+  aes(x = Degree, y = n) +
+  geom_point(shape = "circle", size = 1.5, colour = "turquoise3") +
+  labs(title = "Degree Distribution of Disease Genes in AGN") +
+  theme_minimal()
+
+gene_deg_log_df = logbin_distribution(samples = gene_degree_df$Degree, B = 20)
+row_sub = apply(gene_deg_log_df, 1, function(row) all(row != 0))
+gene_deg_log_df = gene_deg_log_df[row_sub,]
+
+ggplot(gene_deg_log_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "turquoise3") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Logbinned Degrees of Disease Genes") +
+  theme_minimal()
+
+```
+
+
+# the Autoimmune Disease Gene Network
+
+```{r}
+gene_degree_df = data.frame(Degree = degree(graph = g_gene)) %>%
+  mutate(Gene = rownames(.))
+gene_degree_df %<>%
+  arrange(desc(Degree))
+gene_degree_df$Gene = factor(row.names(gene_degree_df), levels = row.names(gene_degree_df))
+
+ggplot(gene_degree_df %>% dplyr::arrange(Degree)) +
+  aes(x = Gene, y = Degree) +
+  geom_point(shape = "circle", fill = "turquoise3", color = "turquoise3", alpha = 0.4) #+
+  #theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+```
+
+## Assess how random the ADN is
+
+```{r}
+# Assess randomization of the ADN adn AGN
+
+#og_matrix = as_incidence_matrix(g, types = NULL, attr = NULL, names = TRUE, sparse = FALSE)
+#diseases = rownames(og_matrix)
+#genes = colnames(og_matrix)
+
+#distrib_dis = c()
+#distrib_gene = c()
+distrib_LCC = c()
+iter = 1000 # to run for 10^4, designate 5.5 hrs
+
+for(i in 1:iter){
+  g_rewired = birewire.rewire.bipartite(g)
+  #rewired_inc = birewire.rewire.bipartite(incidence = og_matrix) # rewire
+  #g_rewired = graph_from_incidence_matrix(rewired_inc)
+  
+  #V(g_rewired)$type <- bipartite.mapping(g_rewired)$type
+  #E(g_rewired)$weight <- 1
+  #V(g_rewired)$degree = degree(g_rewired)
+  
+  #g_dis_temp = bipartite_projection(g_rewired, multiplicity = T, which = "false")
+  #g_gene_temp = bipartite_projection(g_rewired, multiplicity = T, which = "true")
+  
+  #distrib_dis = c(distrib_dis, max(components(g_dis_temp)$csize))
+  #distrib_gene = c(distrib_gene, max(components(g_gene_temp)$csize))
+  
+  distrib_LCC = c(distrib_LCC, max(components(g_rewired)$csize))
+  
+}
+
+
+
+```
+
+```{r}
+lim = c(min(distrib_LCC), max(distrib_LCC))
+hist(distrib_LCC, main = "Empirical Distribution of LCCs of Autoimmune Disease Network", 
+     col = 'gray75', xlim = c(1910, 1940))
+abline(v = max(components(g)$csize), col = "red")
+text(max(components(g)$csize), 250, labels = paste0("Observed LCC size = ", max(components(g)$csize)), srt=0.2, pos=2.5, col = "red")
+```
+```{r}
+# Run randomization with Deisy's function
+
+out = NetSci::LCC_Component(g = g, N = 10000)
+
+lim = c(min(out$LCCZ), max(out$LCCZ))
+hist(out$LCCZ, main = "Empirical Distribution of LCCs of Autoimmune Disease Network", 
+     col = 'gray75', xlim = c(min(lim - 20), max(lim + 5)), xlab = "LCC size")
+abline(v = out$LCC, col = "red")
+
+```
+
+
+```{r}
+# look at distributions from the randomization
+
+lim = c(min(distrib_dis), max(distrib_dis))
+hist(distrib_dis, main = "Empirical Distribution of LCCs of Autoimmune Disease Network", 
+     col = 'gray75', xlim = c(min(lim - 3), max(lim + 1)))
+abline(v = max(components(g_dis)$csize), col = "red")
+
+lim = c(min(distrib_gene), max(distrib_gene))
+hist(distrib_gene, main = "Empirical Distribution of LCCs of Autoimmune Disease Gene Network",
+     col = 'gray75', xlim = c(min(lim - 20), max(lim + 8)))
+abline(v = max(components(g_gene)$csize), col = "red")
+```
+
+
+
+
+# Mutliple Autoimmune Syndrome (3 or more autoimmune diseases)
+```{r}
+# which genes are in 3 or more diseases
+MAS_genes <- gene_assoc %>% filter(n >= 2)
+
+MAS_GDA <- GDA_auto %>%
+  filter(hgnc_symbol %in% MAS_genes$hgnc_symbol)
+
+MAS_g = graph_from_edgelist(as.matrix(MAS_GDA), directed = F)
+V(MAS_g)$type <- bipartite_mapping(MAS_g)$type
+E(MAS_g)$weight <- 1
+V(MAS_g)$degree = degree(MAS_g)
+
+# Get the individual projections in the autoimmune disease network
+MAS_g_dis = bipartite_projection(MAS_g, multiplicity = T, which = "false") # get the disease projection
+MAS_g_gene = bipartite_projection(MAS_g, multiplicity = T, which = "true") # get the gene projection
+
+# Looking at components
+components(MAS_g_dis)$csize
+components(MAS_g_gene)$csize
+
+
+```
+
+```{r}
+# Do we see type i: 
+#myasthenia gravis, thymoma, polymyositis and giant cell myocarditis
+type_i <- c("myasthenia gravis", "polymyositis")
+g_type_i = subgraph(g_dis, type_i)
+V(g_type_i)$size = strength(g_type_i) * 50
+
+#g_type_i %>%
+#  ggraph(., 'fr') +
+#  geom_edge_hive(aes(width = weight, alpha = weight)) +
+#  geom_node_point(aes(size = degree), fill = "tomato1", colour = "tomato1"
+#                  ) + 
+#  scale_color_hue(c = c(20)) + 
+#  ggnewscale::new_scale("color") + 
+#  geom_node_text(aes(label = name,
+#                     size = degree*0.2)
+#                 ) +
+#  labs(
+#    degree = "# genes assoc with disease",
+#    weight = "# of genes in both diseases"
+#       ) +
+#  scale_color_hue(l  = c(10), c = 20) +
+#  scale_size(range = c(2, 8)) + 
+#  theme_void()
+
+# autoimmune thyroid disease in secondary type 1 MAS
+type_i_other <- c(type_i, "hashimoto disease")
+g_type_i_other = induced_subgraph(g_dis, type_i_other) %>%
+  as_data_frame(what = "edges") %>%
+  mutate(color = ifelse(from %in% type_i & to %in% type_i, "primary", "secondary")) %>%
+  graph_from_data_frame(directed = F)
+
+V(g_type_i_other)$size = strength(g_type_i_other) * 50
+#E(g_type_i_other)$color = ifelse(E(g_type_i_other) %in% E(g_type_i), "primary", "secondary")
+g_type_i_other %>%
+  ggraph(., 'stress') +
+  # incorp strength()
+  geom_edge_hive(aes(width = weight, color = color)) +
+  scale_edge_colour_manual(values = c("black", "grey50")) + 
+  #scale_color_brewer
+  geom_node_point(aes(size = size), fill = "tomato1", colour = "tomato1"
+                  ) + 
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     size = size*0.2)
+                 ) +
+  labs(
+    degree = "# genes assoc with disease",
+    weight = "# of genes in both diseases"
+       ) +
+  scale_color_hue(l  = c(10), c = 20) +
+  scale_size(range = c(2, 8)) + 
+  theme_void()
+
+# which genes relate to type_i and what are the other diseases they are associated with?
+#myasthenia_genes <- GDA_auto %>% filter(NewName == "myasthenia gravis")
+#myasthenia_genes <- unique(myasthenia_genes$hgnc_symbol)
+#polymyo_genes <- GDA_auto %>% filter(NewName == "polymyositis")
+#polymyo_genes <- unique(polymyo_genes$hgnc_symbol)
+#type_i_genes <- intersect(myasthenia_genes, polymyo_genes)
+
+#type_i_potential <- GDA_auto %>%
+#  filter(hgnc_symbol %in% type_i_genes)
+#print(sort(unique(type_i_potential$NewName)))
+
+```
+
+
+```{r}
+# Do we see type ii
+#Sjögren’s syndrome, rheumatoid arthritis (RA), primary biliary cirrhosis (PBC), scleroderma, and autoimmune thyroid disease
+type_ii <- c("sjogrens syndrome", "arthritis rheumatoid", "scleroderma", "hashimoto disease")
+g_type_ii = subgraph(g_dis, type_ii)
+V(g_type_ii)$size = strength(g_type_ii) * 50
+
+g1 <- g_type_ii %>%
+  delete.vertices(., degree(.) == 0 ) %>%
+  ggraph(., 'fr') +
+  # incorp strength()
+  geom_edge_link(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = degree), fill = "tomato1", colour = "tomato1"
+                  ) + 
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     size = degree*0.2)
+                 ) +
+  labs(
+    degree = "# genes assoc with disease",
+    weight = "# of genes in both diseases"
+       ) +
+  scale_color_hue(l  = c(10), c = 20) +
+  scale_size(range = c(2, 8)) + 
+  theme_void()
+
+# chronic active hepatitis, lupus, pemphigus, bullous pemphigoid, autoimmune hemolytic anemia, idiopathic thrombopenic purpura, alopecia areata and Addison’s disease 
+type_ii_other <- c(type_ii, "hepatitis autoimmune", "lupus erythematosus systemic", "anemia hemolytic", 
+                   "alopecia areata")
+g_type_ii_other = subgraph(g_dis, type_ii_other)
+V(g_type_ii_other)$size = strength(g_type_ii_other) * 50
+g2 <- g_type_ii_other %>%
+  delete.vertices(., degree(.) == 0 ) %>%
+  ggraph(., 'fr') +
+  # incorp strength()
+  geom_edge_link(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = degree), fill = "tomato1", colour = "tomato1"
+                  ) + 
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     size = degree*0.2)
+                 ) +
+  labs(
+    degree = "# genes assoc with disease",
+    weight = "# of genes in both diseases"
+       ) +
+  scale_color_hue(l  = c(10), c = 20) +
+  scale_size(range = c(2, 8)) + 
+  theme_void()
+
+g1 + g2
+
+```
+
+
+```{r}
+# Do we see type iii
+#autoimmune thyroid disease, myasthenia gravis and/or thymoma, Sjögren’s syndrome, pernicious anemia, idiopathic thrombopenic purpura (ITP), Addison’s disease, type 1 diabetes mellitus, vitiligo, autoimmune hemolytic anemia, systemic lupus erythematosus (SLE), and dermatitis herpetiformis.
+
+type_iii <- c("hashimoto disease","myasthenia gravis","sjogrens syndrome", "diabetes mellitus type 1","anemia hemolytic", "lupus erythematosus systemic")
+g_type_iii = subgraph(g_dis, type_iii)
+V(g_type_iii)$size = strength(g_type_iii) * 50
+
+g3 <- g_type_iii %>%
+  delete.vertices(., degree(.) == 0 ) %>%
+  ggraph(., 'fr') +
+  # incorp strength()
+  geom_edge_link(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = degree), fill = "tomato1", colour = "tomato1"
+                  ) + 
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     size = degree*0.2)
+                 ) +
+  labs(
+    degree = "# genes assoc with disease",
+    weight = "# of genes in both diseases"
+       ) +
+  scale_color_hue(l  = c(10), c = 20) +
+  scale_size(range = c(2, 8)) + 
+  theme_void()
+
+# acquired primary hypogonadism, hypophysitis, RA, PBC, relapsing polychondritis, multiple sclerosis, CAH, ulcerative colitis, and scleroderma
+
+type_iii_other <- c(type_iii, "arthritis rheumatoid", "multiple sclerosis", "hepatitis autoimmune", "colitis ulcerative", "scleroderma")
+g_type_iii_other = subgraph(g_dis, type_iii_other)
+V(g_type_iii_other)$size = strength(g_type_iii_other) * 50
+
+g4 <- g_type_iii_other %>%
+  delete.vertices(., degree(.) == 0 ) %>%
+  ggraph(., 'fr') +
+  # incorp strength()
+  geom_edge_link(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = degree), fill = "tomato1", colour = "tomato1"
+                  ) + 
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     size = degree*0.2)
+                 ) +
+  labs(
+    degree = "# genes assoc with disease",
+    weight = "# of genes in both diseases"
+       ) +
+  scale_color_hue(l  = c(10), c = 20) +
+  scale_size(range = c(2, 8)) + 
+  theme_void()
+
+g3 + g4
+```
+
+```{r}
+# can we identify a new type of MAS? or reclassify the types?
+
+MAS_g_dis %>%
+  ggraph(., 'fr') +
+  # incorp strength()
+  geom_edge_link(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = degree), fill = "tomato1", colour = "tomato1"
+                  ) + 
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     size = degree*0.2)
+                 ) +
+  labs(
+    degree = "# genes assoc with disease",
+    weight = "# of genes in both diseases"
+       ) +
+  scale_color_hue(l  = c(10), c = 20) +
+  scale_size(range = c(2, 8)) + 
+  theme_void()
+
+## Filter out diseases with fewer linked
+#twent5_dis = rownames(dis_degree_df)[which(dis_degree_df$Degree > 25)]
+
+g_dis_LCC %>%
+  delete.vertices(., degree(.) <= 2 ) %>%
+  ggraph(., 'fr') +
+  geom_edge_link(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = degree), fill = "tomato1", colour = "tomato1") + 
+  geom_node_text(aes(label = name, size = degree*0.2)) +
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  
+  scale_color_hue(l  = c(10), c = 20) +
+  scale_size(range = c(2, 8)) + 
+  theme_void() +
+  labs(
+    degree = "# genes assoc with disease",
+    weight = "# of genes in both diseases"
+       )
+
+```
+
+
+
+
+
+
+
+
+
+
+# How are these diseases related to immunity modules (innate vs adaptive)
+```{r}
+## Make grouped bar charts comparing raw counts and percentages of disease-associated genes in innate and adapt
+
+# get genes in each branch if immunity
+innate_genes <- immune_data %>%
+  filter(isInnateGO == 1 | isInnateKEGG == 1 | isInnateInnateDB==1)
+innate_genes <- unique(innate_genes$Symbol)
+
+adapt_genes <- immune_data %>%
+  filter(isAdaptiveGO == 1 | isAdaptiveKEGG == 1)
+adapt_genes <- unique(adapt_genes$Symbol)
+
+immunity_genes <- unique(immune_data$Symbol)
+
+dis_in_immunity <- GDA_auto
+
+# Make data frames for grouped bar chart
+dis_immun_bar_df <- dis_in_immunity %>%
+  group_by(NewName) %>%
+  mutate(NumInnate = sum(hgnc_symbol %in% innate_genes)) %>%
+  mutate(NumAdapt = sum(hgnc_symbol %in% adapt_genes)) %>%
+  select(NewName, NumInnate, NumAdapt) %>%
+  unique()
+rownames(dis_immun_bar_df) <- dis_immun_bar_df$NewName
+#dis_immun_bar_df$NumInnate <- (-1) * dis_immun_bar_df$NumInnate
+dis_immun_bar_df$NumInnate <- dis_immun_bar_df$NumInnate
+
+dis_immun_bar_df <- left_join(dis_immun_bar_df, disease_gene_assoc)
+colnames(dis_immun_bar_df)[4] <- "num_genes"
+dis_immun_bar_df$propInnate <- dis_immun_bar_df$NumInnate / dis_immun_bar_df$num_genes
+dis_immun_bar_df$propAdapt <- dis_immun_bar_df$NumAdapt / dis_immun_bar_df$num_genes
+
+dis_immun_raw_count_df <- dis_immun_bar_df %>% select(NewName, NumInnate, NumAdapt, num_genes)
+dis_immun_prop_df <- dis_immun_bar_df %>% select(NewName, propInnate, propAdapt, num_genes)
+
+# order based on total num dis genes (num_genes)
+dis_immun_raw_count_df <- pivot_longer(dis_immun_raw_count_df, cols = c(NumInnate, NumAdapt), 
+                                 names_to = "ImmMod", values_to = "numGenes")
+dis_immun_prop_df <- pivot_longer(dis_immun_prop_df, cols = c(propInnate, propAdapt), 
+                                 names_to = "ImmMod", values_to = "propGenes")
+
+#dis_immun_raw_count_df %<>% arrange(desc(num_genes))
+#dis_immun_raw_count_df$Disease = factor(row.names(dis_immun_raw_count_df), 
+#                                   levels = row.names(dis_immun_raw_count_df))
+#dis_immun_prop_df %<>% arrange(desc(num_genes))
+#dis_immun_prop_df$Disease = factor(row.names(dis_immun_prop_df),
+#                                   levels = row.names(dis_immun_prop_df))
+
+# Make grouped bar charts
+ggplot(dis_immun_raw_count_df) + 
+  aes(x = reorder(NewName, num_genes), y = numGenes, fill = ImmMod) + 
+  geom_bar(stat = "identity", position = "identity") +
+  theme_minimal() +
+  theme(axis.text = element_text(size = 15)) +
+  labs(x = "Disease", y = "Number of Genes in Innate and Adaptive Immunity", 
+       title = "Number of Autoimmune Disease-Associated Genes in Innate and Adaptive Immunity") +
+  #theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip() 
+
+ggplot(dis_immun_prop_df) + 
+  aes(x = reorder(NewName, num_genes), y = propGenes, fill = ImmMod) + 
+  geom_bar(stat = "identity", position = "identity") +
+  theme_minimal() + 
+  theme(axis.text = element_text(size = 15)) +
+  labs(x = "Disease", y = "Fraction of Genes in Innate and Adaptive Immunity", 
+       title = "Percentage of Autoimmune Disease Associated Genes in Innate and Adaptive Immunity Modules") +
+  #theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip()
+  
+```
+
+```{r}
+# Make bar graph with only disease in the top 10 genes
+
+# since disease_gene_assoc is sorted in increasing num gene order
+top_diseases <- top_n(disease_gene_assoc, n=10)
+
+top_immune_prop_df <- dis_immun_prop_df %>%
+  filter(NewName %in% top_diseases$NewName) %>%
+  mutate(aImmMod = ifelse(ImmMod == "propInnate", "apropImmate", "propAdaptive"))
+
+ggplot(top_immune_prop_df) + 
+  aes(x = reorder(NewName, num_genes), y = propGenes, weight = propGenes, fill = aImmMod) + 
+  geom_bar(stat = "identity", position = "identity") +
+  theme_minimal() + 
+  scale_fill_discrete(name = "Immune Component", #labels = c("proportion of genes in \nAdaptive Immunity", "proportion of genes in \nInnate Immunity")
+                      ) +
+  theme(text = element_text(size = 20), axis.text = element_text(size = 15)) +
+  labs(x = "Disease", y = "Fraction of Genes in Innate and Adaptive Immunity", 
+       title = "Proportion of Autoimmune Disease Genes in Innate and Adaptive Immunity") +
+  coord_flip()
+
+
+ggplot(top_immune_prop_df) +
+  aes(
+    x = reorder(NewName, num_genes),
+    fill = ImmMod,
+    colour = ImmMod,
+    weight = propGenes
+  ) +
+  geom_bar() +
+  scale_fill_hue(direction = 1) +
+  scale_color_hue(direction = 1) +
+  theme_minimal() + 
+  scale_fill_discrete(name = "Immune Component", labels = c("proportion of genes in \nAdaptive Immunity", "proportion of genes in \nInnate Immunity")) +
+  theme(text = element_text(size = 20), axis.text = element_text(size = 15)) +
+  labs(x = "Disease", y = "Fraction of Genes in Innate and Adaptive Immunity", 
+       title = "Proportion of Autoimmune Disease Genes in Innate and Adaptive Immunity") +
+  coord_flip()
+
+
+
+```
+
+
+
+
+
+############################################################################### Code that is in 2.0.1
+
+## Disease LCCs
+
+```{r}
+# Computes and Evaluates LCC of each disease
+autoimmune_dis_list = unique(GDA_auto$NewName)
+
+col_labels <- c("Disease", "LCCsize", "p_val", "Mean", "SD", "Z", "num_genes")
+autoimmune_LCC_df = data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(autoimmune_LCC_df) = col_labels
+
+# for each disease
+for (dis in autoimmune_dis_list){
+  print(dis)
+  dis_genes = GDA_auto %>% filter(NewName == dis) # get all disease genes
+  dis_genes = dis_genes$hgnc_symbol
+  dis_genes = dis_genes[dis_genes %in% V(ppi_g)$name] # filter for those in PPI
+  
+  LCC_dis = LCC_signif(G = ppi_g, targets = dis_genes, 
+                       num_bins_degree_G = 1, min_bin_degree = 20, iter = 1000)
+  
+  # add info to df
+  new_line <- c(dis, LCC_dis$size, LCC_dis$p_val, LCC_dis$emp_mean, 
+                LCC_dis$emp_SD, LCC_dis$Z, length(dis_genes))
+  autoimmune_LCC_df[nrow(autoimmune_LCC_df) + 1,] <- new_line
+  
+  # print LCC hist
+  #if(LCC_dis$p_val < 0.05){
+  #  lim = c(LCC_dis$size, LCC_dis$distribution)
+  #  hist(LCC_dis$distribution, main = paste0(dis, " Empirical LCC Distribution"), 
+  #      xlim = c(min(lim - 50), max(lim + 50)), col = 'gray75', 
+  #       ylab = "", breaks = 20)
+    
+   # abline(v = LCC_dis$size, col = "red")
+  #}
+  
+  # print degree distribution of LCC genes
+  
+  # print degree distribution of non-LCC genes
+}
+
+autoimmune_LCC_df$LCCsize <- as.numeric(autoimmune_LCC_df$LCCsize)
+autoimmune_LCC_df$p_val <- as.numeric(autoimmune_LCC_df$p_val)
+autoimmune_LCC_df$Mean <- as.numeric(autoimmune_LCC_df$Mean)
+autoimmune_LCC_df$SD <- as.numeric(autoimmune_LCC_df$SD)
+autoimmune_LCC_df$Z <- as.numeric(autoimmune_LCC_df$Z)
+autoimmune_LCC_df$num_genes <- as.numeric(autoimmune_LCC_df$num_genes)
+
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+autoimmune_LCC_df$signif <- ifelse(autoimmune_LCC_df$p_val < 0.05, "signif", "nonsignif")
+autoimmune_LCC_df$LCC_prop <- autoimmune_LCC_df$LCCsize / autoimmune_LCC_df$num_genes
+```
+
+```{r}
+
+######### Read this in if you do not calculate it here
+autoimmune_LCC_df = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs.tsv", 
+                               sep = "\t", stringsAsFactors = F, header = T)
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+
+autoimmune_LCC_df <- autoimmune_LCC_df %>% 
+  mutate(padj = p.adjust(p_val, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05"))
+```
+
+
+```{r}
+# Vizualize the disease LCCs and p-value
+
+autoimmune_LCC_df %<>%
+  arrange(padj)
+autoimmune_LCC_df$Disease = factor(row.names(autoimmune_LCC_df), 
+                                   levels = row.names(autoimmune_LCC_df))
+
+autoimmune_LCC_df %>% 
+  mutate(padj = p.adjust(p_val, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05")) %>%
+  ggplot() +
+  aes(x = Disease, y = -log10(p_val), colour = signif, size = LCCsize) +
+  geom_point(shape = "circle", alpha = 0.5) +
+  ggplot2::scale_y_continuous(limits = c(0, 10)) + 
+  scale_size(range = c(0, 10)) +
+  labs(x = "Disease", y = "LCC -log10 p_adj-value") +
+  scale_color_hue(direction = 1) +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "bottom") +
+  geom_hline(yintercept = -log10(0.05), color = "red") 
+
+ggplot(autoimmune_LCC_df %>% dplyr::arrange(p_val)) +
+  aes(x = Disease, y = p_val, colour = signif, size = LCCsize) +
+  geom_point(shape = "circle", fill = "#112446", alpha = 0.4) +
+  labs(x = "Disease", y = "LCC p-value") +
+  scale_color_hue(direction = 1) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  geom_hline(yintercept = 0.05, color = "red")
+
+ggplot(autoimmune_LCC_df %>% dplyr::arrange(p_val)) +
+  aes(x = Disease, y = -log10(p_val), colour = signif, size = LCCsize) +
+  geom_point(shape = "circle", fill = "#112446", alpha = 0.4) +
+  labs(x = "Disease", y = "-log10 p-value", title = "Autoimmune Diseases and their Module Size and Significance") +
+  scale_color_hue(direction = 1) +
+  scale_y_log10() +
+  ylim(0, 7.5) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  geom_hline(yintercept = -log10(0.05), color = "red")
+  
+
+```
+
+```{r}
+# make viz where size of LCC if proportion of LCCsize/numDisGenes 
+# and maybe even make this its own viz
+
+ggplot(autoimmune_LCC_df %>% dplyr::arrange(p_val)) +
+  aes(x = Disease, y = LCC_prop, colour = signif, size = LCC_prop) +
+  geom_point(shape = "circle", fill = "#112446", alpha = 0.4) +
+  labs(x = "Disease", y = "proportion of disease genes in LCC", title = "Autoimmune Diseases and the Proportion of Disease Genes in LCC") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+```
+
+```{r}
+# make visualization of the number of genes per disease with LCC size as point size
+
+LCC_info <- autoimmune_LCC_df %>% select(Disease, LCCsize)
+colnames(LCC_info)[1] <- "NewName"
+disease_gene_assoc <- merge(disease_gene_assoc, LCC_info, by = "NewName")
+
+ggplot(disease_gene_assoc) +
+  aes(x = NewName, y = n, size = LCCsize) +
+  geom_point(shape = "circle", fill = "tomato1", color = "tomato1", alpha = 0.4) +
+  labs(title = "Number of Disease Genes per Autoimmune Disease", x = "Autoimmune Disease", y = "Number of Disease Genes") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+
+
+
+
+
+```{r}
+# look at similarity with disease category colored
+
+x = GDA_data %>% select(NewName, DescriptorName)
+
+tmp = GDA_data$DescriptorName %>% 
+  stringr::str_split("\\|", simplify = TRUE) %>%
+  as.data.frame()
+x = cbind(x, tmp) %>%
+  pivot_longer(-NewName) %>% 
+  filter(value != "") %>%
+  filter(name != "DescriptorName") %>% 
+  select(-name) %>%
+  unique()
+
+# gets disease category 
+categ_dis = x %>% 
+  group_by(value) %>%
+  mutate(n = n()) %>%
+  ungroup() %>% 
+  group_by(NewName) %>% 
+  mutate(x = max(n)) %>%
+  filter(n == x) %>%
+  select(-c(n,x)) %>%
+  filter(NewName %in% GDA_auto$NewName)
+categ_dis = categ_dis[match(V(g_sep)$name, categ_dis$NewName),]
+
+V(g_sep)$value <- categ_dis$value
+
+ggraph(g_sep, 'stress') +
+  geom_edge_hive(aes(width = weight,
+                    alpha = weight)) +
+  geom_node_point(aes(size = degree, color = value)) +
+  geom_node_text(aes(label = name),
+                 size = 3) +
+  scale_edge_width(range = c(0.1, 1)) +
+  scale_color_hue(l  = c(75), c = 35) + 
+  #scale_edge_width(range = c(0, 3))+
+  #scale_size(range = c(2, 8)) + 
+  theme_void()
+
+```
+
+```{r}
+signif_dis <- autoimmune_LCC_df %>% filter(signif == "signif")
+signif_dis <- unique(as.character(signif_dis$Disease))
+
+g_signif_LCC_sep = delete_vertices(g_sep, V(g_sep)$name %ni% signif_dis)
+isolated = which(degree(g_signif_LCC_sep)==0)
+g_signif_LCC_sep = delete.vertices(g_signif_LCC_sep, isolated)
+
+ggraph(g_signif_LCC_sep, 'stress') +
+  geom_edge_hive(aes(width = weight,
+                    alpha = weight)) +
+  geom_node_point(aes(size = degree, color = value)) +
+  geom_node_text(aes(label = name),
+                 size = 3) +
+  scale_edge_width(range = c(0.1, 1)) +
+  scale_color_hue(l  = c(75), c = 35) + 
+  scale_edge_width(range = c(0, 3))+
+  scale_size(range = c(2, 8)) + 
+  theme_void()
+```
+
+
+
+# Some Venn diagrams
+```{r}
+
+fit <- euler(list(ImmunityModule = unique(immune_data$Symbol), AutoimmuneDisease = unique(GDA_auto$hgnc_symbol)))
+plot(fit,
+     fills = list(fill = c("turquoise3", "tomato4"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T,
+     main = "How Many Autoimmune Disease Genes in Immunity Pathways",
+     shape = "ellipse")
+```
+
+```{r}
+# of the genes linking diseases to each toher, which are in immune paths?
+
+multiDiseaseGenes = gene_assoc %>% filter(n > 1)
+multiDiseaseGenes = unique(multiDiseaseGenes$hgnc_symbol)
+
+fit <- euler(list(ImmunityModule = unique(immune_data$Symbol), multiAutoimmuneDisease = multiDiseaseGenes))
+plot(fit,
+     fills = list(fill = c("turquoise3", "tomato4"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T,
+     main = "How Many Disease Genes in Multiple AutoDiseases are in Immunity Pathways",
+     shape = "ellipse")
+
+```
+
+```{r}
+# do genes in multiple diseases form an LCC?
+
+multiDiseaseGenes = multiDiseaseGenes[multiDiseaseGenes %in% V(ppi_g)$name] # filter for those in PPI
+  
+LCC_multi_dis = LCC_signif(G = ppi_g, targets = multiDiseaseGenes, 
+                       num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+lim = c(LCC_multi_dis$size, LCC_multi_dis$distribution)
+hist(LCC_multi_dis$distribution, main = paste0("Multi-Autoimmune Disease Gene Empirical LCC Distribution"), 
+     xlim = c(min(lim - 50), max(lim + 50)), col = 'gray75', 
+     ylab = "", breaks = 20)
+abline(v = LCC_multi_dis$size, col = "red")
+
+# degree distributions
+multi_graph <- induced_subgraph(ppi_g, multiDiseaseGenes)
+temp <- components(multi_graph)$membership
+inLCC_multi = names(temp[temp == 1])
+LCC_multi_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_multi) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_multi_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10", limits = c(1, 1050)) +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_multi = names(temp[temp != 1])
+nonLCC_multi_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_multi) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_multi_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of Proteins Not in LCC") +
+  theme_minimal()
+
+# how many components do the multi disease genes make?
+
+```
+
+```{r}
+fit <- euler(list(ImmunityModule = unique(immune_data$Symbol), multiDisLCC = inLCC_multi))
+plot(fit,
+     fills = list(fill = c("turquoise3", "tomato4"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T,
+     main = "Overlap of Immune Proteins and Proteins in Multi-disease LCC",
+     shape = "ellipse")
+```
+
+
+
+```{r}
+## Look at disease prevalence vs number of total disease genes
+library(readxl)
+# read in prev data
+dis_prev <- read_xlsx("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Autoimmune_Disease_Prev.xlsx")
+colnames(dis_prev)[1] <- c("NewName")
+
+# merge with disease_gene_assoc by disease name
+disease_assoc_prev <- left_join(disease_gene_assoc, dis_prev)
+
+ggplot(disease_assoc_prev) +
+  aes(x = n, y = Prevalence) +
+  geom_point(shape = "circle", size = 5, colour = "#112446", alpha = 0.4) +
+  #geom_label( 
+  #  data = disease_assoc_prev %>% filter(n>100 | Prevalence>2500), # Filter data first
+  #  aes(label=NewName), label.size = NA
+  #) +
+  geom_text(
+    data = disease_assoc_prev %>% filter(n>100 | Prevalence>2500), 
+    nudge_x = 0.25, nudge_y = 0.5, 
+    check_overlap = T,
+    aes(label=NewName)
+  ) +
+  labs(title = "Autoimmune Disease Prevalence vs Number of Disease Genes", x = "Number of Disease Genes") +
+  theme_minimal()
+
+# pearson correlation fo 0.204449
+
+```
+
+
+
+
+
+############################################## Code I'm not using
+
+
+
+## Assess how random the HADN and ADGN are
+
+# get the incidence matrix, call it og_matrix
+og_matrix = as_incidence_matrix(g, types = NULL, attr = NULL, names = TRUE, sparse = FALSE)
+diseases = rownames(og_matrix)
+genes = colnames(og_matrix)
+
+distrib_dis = c()
+distrib_gene = c()
+iter = 10
+
+for(i in 1:iter){
+  for(edg in 1:gsize(g)){
+    # randomly select two "1"s and get their indeces
+    g1 = sample(genes,1)
+    g2 = sample(genes,1)
+    d1 = sample(diseases,1)
+    d2 = sample(diseases,1)
+    edge1 = og_matrix[d1, g1]
+    edge2 = og_matrix[d2, g2]
+    # potential new edges
+    tempedge1 = og_matrix[d1, g2]
+    tempedge2 = og_matrix[d2, g1]
+    
+    while(g1==g2 | d1==d2 | edge1==0 | edge2==0 | tempedge1==1 | tempedge2==1){
+      #print(paste0("g1:", g1, " g2:", g2, " d1:", d1, " d2:", d2))
+      
+      if(g1==g2){ # if the genes are the same
+        g2 = sample(genes,1)
+      } else if(d1==d2){ # if the diseases are the same
+        d2 = sample(diseases,1)
+      } else if(edge1==0){ # if the random edge is 0
+        g1 = sample(genes,1)
+      } else if(edge2==0){
+        g2 = sample(genes,1)
+      } else if(tempedge1==1){ # if the potential edge already exists
+        g2 = sample(genes,1)
+      }else if(tempedge2==1){
+        g1 = sample(genes,1)
+      }
+      
+      # redefine edges
+      edge1 = og_matrix[d1, g1]
+      edge2 = og_matrix[d2, g2]
+      tempedge1 = og_matrix[d1, g2]
+      tempedge2 = og_matrix[d2, g1]
+    }
+    # remove [g1, d1] [g2, d2]
+    # make edge1 and edge2 == 0
+    og_matrix[d1, g1] = 0
+    og_matrix[d2, g2] = 0
+    # tempedge1 and tempedge2 == 1
+    og_matrix[d1, g2] = 1
+    og_matrix[d2, g1] = 1
+  }
+  
+  # make graph
+  temp_g = igraph::graph_from_incidence_matrix(og_matrix)
+  
+  # make graph projections
+  temp_g_dis = bipartite_projection(temp_g, multiplicity = T, which = "false")
+  temp_g_gene = bipartite_projection(temp_g, multiplicity = T, which = "true")
+  
+  # add LCC of disease projection to distrib_dis
+  distrib_dis = c(distrib_dis, max(components(temp_g_dis)$csize))
+  #print(max(components(temp_g_dis)$csize))
+  
+  # add LCC of gene projection to distrib_gene
+  distrib_gene = c(distrib_gene, max(components(temp_g_gene)$csize))
+  #print(max(components(temp_g_gene)$csize))
+}
+
+
+
+
+
+
+
+
+
+
+
+
+

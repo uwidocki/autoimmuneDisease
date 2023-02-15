@@ -1,0 +1,468 @@
+---
+title: "0.3_PathwayName_Examination"
+author: "Ursula Widocki"
+date: "6/28/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(stats)
+
+library(ggpubr)
+library(factoextra)
+```
+
+```{r}
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", 
+                         sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+
+# Make all of the pathway names lowercase for similarity purposes
+immune_data = immune_data %>%
+  mutate(GOPathwayInnate = tolower(GOPathwayInnate)) %>%
+  mutate(GOPathwayAdaptive = tolower(GOPathwayAdaptive)) %>%
+  mutate(GOPathwayOther = tolower(GOPathwayOther)) %>%
+  mutate(InnateDBPathway = tolower(InnateDBPathway)) %>%
+  mutate(KEGGPathwayInnate = tolower(KEGGPathwayInnate)) %>%
+  mutate(KEGGPathwayAdaptive = tolower(KEGGPathwayAdaptive)) %>%
+  mutate(ReactomePathwayInnate = tolower(ReactomePathwayInnate)) %>%
+  mutate(ReactomePathwayAdaptive = tolower(ReactomePathwayAdaptive)) %>%
+  select(Symbol, GOPathwayAdaptive, GOPathwayInnate, GOPathwayOther, KEGGPathwayAdaptive, 
+         KEGGPathwayInnate, ReactomePathwayInnate, ReactomePathwayAdaptive) %>%
+  unique()
+
+```
+
+
+
+Look at each db path names and determine which need what kind of cleaning, if any
+
+```{r}
+# GO innate is fine
+#look = (unique(immune_data$GOpathName.innate))
+#look = look[!is.na(look)]
+# GO adaptive is fine
+#look = (unique(immune_data$GOpathName.adaptive))
+#look = look[!is.na(look)]
+
+# InnateDB names is most definitely not fine
+#look = (unique(immune_data$InnateDBpathName))
+#look = look[!is.na(look)]
+
+# KEGG innate: Remove " - Homo sapiens (human)" from the end of each path
+#look = (unique(immune_data$KEGGpathName.innate))
+#look = look[!is.na(look)]
+# KEGG adaptive: Remove " - Homo sapiens (human)" from the end of each string
+#look = (unique(immune_data$KEGGpathName.adaptive))
+#look = look[!is.na(look)]
+
+# ReactomeDB innate: Remove "Homo sapiens: " from the beginning of each string
+#look = (unique(immune_data$ReactomePathName.innate))
+#look = look[!is.na(look)]
+# ReactomeDB adaptive: Remove "Homo sapiens: " from the beginning of each string
+#look = (unique(immune_data$ReactomePathName.adaptive))
+#look = look[!is.na(look)]
+
+```
+
+# Make edits that are the same across all databases
+
+```{r}
+test_df = immune_data
+
+# remove all terms between parentheses, replace "-" with " ", remove ","
+test_df$GOPathwayInnate <- sub("\\s*\\([^\\)]+\\)", "", as.character(test_df$GOPathwayInnate))
+test_df$GOPathwayInnate <- sub("-", " ", as.character(test_df$GOPathwayInnate)) # these two lines are not equal
+test_df$GOPathwayInnate <- sub("-", " ", as.character(test_df$GOPathwayInnate)) # from keyboard
+test_df$GOPathwayInnate <- sub(",", "", as.character(test_df$GOPathwayInnate))
+test_df$GOPathwayAdaptive <- sub("\\s*\\([^\\)]+\\)","", as.character(test_df$GOPathwayAdaptive))
+test_df$GOPathwayAdaptive <- sub("-", " ", as.character(test_df$GOPathwayAdaptive))
+test_df$GOPathwayAdaptive <- sub("-", " ", as.character(test_df$GOPathwayAdaptive)) # from keyboard
+test_df$GOPathwayAdaptive <- sub(",", "", as.character(test_df$GOPathwayAdaptive))
+
+test_df$KEGGPathwayInnate <- sub("\\s*\\([^\\)]+\\)", "", as.character(test_df$KEGGPathwayInnate))
+test_df$KEGGPathwayInnate <- sub("-", " ", as.character(test_df$KEGGPathwayInnate))
+test_df$KEGGPathwayInnate <- sub("-", " ", as.character(test_df$KEGGPathwayInnate)) # from keyboard
+test_df$KEGGPathwayInnate <- sub(",", "", as.character(test_df$KEGGPathwayInnate))
+test_df$KEGGPathwayAdaptive <- sub("\\s*\\([^\\)]+\\)", "", as.character(test_df$KEGGPathwayAdaptive))
+test_df$KEGGPathwayAdaptive <- sub("-", " ", as.character(test_df$KEGGPathwayAdaptive))
+test_df$KEGGPathwayAdaptive <- sub("-", " ", as.character(test_df$KEGGPathwayAdaptive)) # from keyboard
+test_df$KEGGPathwayAdaptive <- sub(",", "", as.character(test_df$KEGGPathwayAdaptive))
+
+test_df$ReactomePathwayInnate <- sub("\\s*\\([^\\)]+\\)","", as.character(test_df$ReactomePathwayInnate))
+test_df$ReactomePathwayInnate <- sub("-", " ", as.character(test_df$ReactomePathwayInnate))
+test_df$ReactomePathwayInnate <- sub("-", " ", as.character(test_df$ReactomePathwayInnate)) # from keyboard
+test_df$ReactomePathwayInnate <- sub(",", "", as.character(test_df$ReactomePathwayInnate))
+test_df$ReactomePathwayAdaptive <- sub("\\s*\\([^\\)]+\\)","", as.character(test_df$ReactomePathwayAdaptive))
+test_df$ReactomePathwayAdaptive <- sub("-", " ", as.character(test_df$ReactomePathwayAdaptive))
+test_df$ReactomePathwayAdaptive <- sub("-", " ", as.character(test_df$ReactomePathwayAdaptive)) # from keyboard
+test_df$RReactomePathwayAdaptive <- sub(",", "", as.character(test_df$ReactomePathwayAdaptive))
+```
+
+# Make edits that are database specific
+
+Edit KEGG Path names
+```{r}
+test_df$KEGGPathwayInnate <- sub(pattern = "   homo sapiens", replacement = "", as.character(test_df$KEGGPathwayInnate), fixed = T)
+
+test_df$KEGGPathwayAdaptive <- sub(pattern = "   homo sapiens", replacement = "", as.character(test_df$KEGGPathwayAdaptive), fixed = T)
+
+```
+
+Edit ReactomeDB Path names
+```{r}
+test_df$ReactomePathwayInnate <- sub(pattern = "homo sapiens: ", replacement =  "", as.character(test_df$ReactomePathwayInnate), fixed = T)
+
+test_df$ReactomePathwayAdaptive <- sub(pattern = "homo sapiens: ", replacement =  "", as.character(test_df$ReactomePathwayAdaptive), fixed = T)
+
+```
+
+
+most_paths = c(test_df$GOpathName.innate, test_df$GOpathName.adaptive, test_df$KEGGpathName.innate, test_df$KEGGpathName.adaptive, test_df$ReactomePathName.adaptive, test_df$ReactomePathName.innate)
+most_paths = most_paths[!is.na(most_paths)]
+most_paths = unique(most_paths)
+  
+revigo_test <- paste(most_paths, collapse = '\n')
+
+write.table(x = revigo_test, file = 'revigo_test.txt', row.names = F, col.names=F)
+
+
+
+Edit InnateDB Path names
+```{r}
+sub_test_df = test_df %>%
+  select(Symbol, InnateDBpathName) %>%
+  mutate(Symbol = tolower(Symbol)) %>%
+  mutate(InnateDBpathName = tolower(InnateDBpathName)) %>%
+  unique() %>%
+  na.omit()
+
+# if gene from Symbol column is the first thing in path string, remove
+for(i in seq(1:dim(sub_test_df)[1])){
+  gene = sub_test_df$Symbol[i]
+  path_name = sub_test_df$InnateDBpathName[i]
+  path_sub = substr(path_name, start = 1, stop = nchar(gene))
+  
+  # test if gene is the in beginning of the path name
+  if(path_sub == gene){
+    path_sub = paste0(path_sub, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = " "
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = pattern # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  # next, if "is a" is first in the path string, remove
+  pattern = "is a"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  # next, if "is " is first in the path string, remove
+  pattern = "is"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  # next, if "plays a role in" is first is the path string, remove
+  pattern = "plays a role in"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  # next, if "acts a" is first is the path string, remove
+  pattern = "acts a"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "acts as a"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "an essential"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "an important"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "expression is"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "has a"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "has"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "involved in the"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "involved in"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "mediates"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "mediated"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "member of the"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "part of the"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "plays a central role in"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "plays a key role in"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "plays a key regulatory role in"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "plays an important role in"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "plays an essential role in"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "an"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "is a"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  pattern = "::"
+  if(pattern == substr(path_name, start = 1, stop = nchar(pattern))){
+    path_sub = paste0(pattern, " ") # add a space to remove space after gene name
+    path_name = sub(pattern = path_sub, replacement = "", path_name)
+  }
+  
+  sub_test_df$newPathName[i] = path_name
+  
+}
+```
+
+```{r}
+# maybe figure out a way to remove all stop words from InnateDB?
+
+```
+
+
+```{r}
+# try the clustering thing with the embeddings to see how things map out
+
+require(magrittr)
+require(word2vec)
+
+GOPathwayNames = unique(c(test_df$GOPathwayInnate, test_df$GOPathwayAdaptive))
+GOPathwayNames = GOPathwayNames[!is.na(GOPathwayNames)]
+
+KEGGPathwayNames = unique(c(test_df$KEGGPathwayInnate, test_df$KEGGPathwayAdaptive))
+KEGGPathwayNames = KEGGPathwayNames[!is.na(KEGGPathwayNames)]
+
+ReactomePathwayNames = unique(c(test_df$ReactomePathwayInnate, test_df$ReactomePathwayAdaptive))
+ReactomePathwayNames = ReactomePathwayNames[!is.na(ReactomePathwayNames)]
+
+PathwayNames = unique(c(GOPathwayNames, KEGGPathwayNames, ReactomePathwayNames))
+
+```
+
+
+```{r}
+model     <- read.word2vec("/Users/ursulawidocki/Desktop/BarabasiLab/Data/pubmed2018_w2v_400D/pubmed2018_w2v_400D.bin")
+terms     <- summary(model, "vocabulary")
+embedding <- as.matrix(model)
+
+```
+
+```{r}
+pb <- txtProgressBar(min = 0, max = length(PathwayNames), style = 3)
+
+# function that gets the average distance
+average_dis = function(disease, e = embedding2){
+  require(magrittr)
+  
+  t = rownames(e)
+  dis = disease %>% 
+    stringr::str_split(., " ", simplify = TRUE) %>% 
+    as.character()
+  
+  t_in_dis = sum(t %in% dis)
+  if(t_in_dis > 0){
+    v =  e[t %in% dis,] %>% 
+      matrix(., ncol = ncol(e)) %>% 
+      colMeans(., na.rm = TRUE) %>% 
+      as.data.frame()
+    names(v)= disease
+    return(v)
+  }
+}
+
+lalala = PathwayNames %>% strsplit(., " ") %>% unlist() %>% unique()
+embedding2 = embedding[rownames(embedding) %in% lalala, ]
+
+average_dis(disease = PathwayNames[1000], e = embedding2)
+
+require(parallel)
+cl = parallel::makePSOCKcluster(10)
+clusterExport(cl, "average_dis")
+clusterExport(cl, "embedding2")
+
+U = clusterApplyLB(cl, PathwayNames, average_dis)
+U %<>% dplyr::bind_cols()
+
+stopCluster(cl)
+
+c = U %>% t %>% na.exclude() %>% philentropy::distance(., method = "cosine") # matrix with distance between diseases
+xxx = U %>% t %>% na.exclude() %>% row.names()
+colnames(c) = row.names(c) = xxx
+
+```
+
+```{r}
+set.seed(123)
+see =  U %>% t %>% na.exclude()
+
+# to help choose the optimal number of kmeans clustering
+fviz_nbclust(see, kmeans, method = "silhouette", k.max = 25) # 20
+fviz_nbclust(see, kmeans, method = "wss", k.max = 50) # na
+fviz_nbclust(see, kmeans, method = "gap_stat", k.max = 25) # 2
+```
+
+```{r}
+km.res <- kmeans(x = see, centers = 2, nstart = 50, iter.max = 20)
+
+fviz_cluster(km.res, data = see,
+             geom = "point",
+             ellipse.type = "convex", 
+             labelsize = 8,
+             ggtheme = theme_bw()
+             )
+
+fviz_cluster(km.res, data = see,
+             geom = "text",
+             ellipse.type = "convex", 
+             labelsize = 8,
+             ggtheme = theme_bw()
+             )
+
+km.res <- kmeans(x = see, centers = 20, nstart = 50, iter.max = 20)
+
+fviz_cluster(km.res, data = see,
+             geom = "point",
+             ellipse.type = "convex", 
+             labelsize = 12,
+             ggtheme = theme_grey()
+             )
+
+fviz_cluster(km.res, data = see,
+             geom = "text",
+             ellipse.type = "convex", 
+             labelsize = 12,
+             ggtheme = theme_grey()
+             )
+```
+
+
+```{r}
+# Look at KEGG and Reactome
+
+# matrix where rows are KEGG paths and cols are Reactome paths
+K_ind = rownames(c)[which(rownames(c) %in% KEGGPathwayNames)]
+R_ind = colnames(c)[which(colnames(c) %in% ReactomePathwayNames)]
+
+KR_pathname_terms = c[K_ind, R_ind]
+
+```
+
+```{r}
+# clustering 
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

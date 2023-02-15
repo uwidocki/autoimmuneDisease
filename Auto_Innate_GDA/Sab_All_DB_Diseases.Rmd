@@ -1,0 +1,239 @@
+---
+title: "Sab_All_DB_Diseases"
+author: "Ursula Widocki"
+date: '2022-06-28'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(igraph)
+require(ggraph)
+library(Cairo)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+`%ni%` <- Negate(`%in%`)
+
+gene_human <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/gene_human.csv")
+gene_human <- gene_human[,2:3]
+
+# Read in PPI data
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+```
+
+
+## get Reactome data
+```{r}
+library(reactome.db)
+reactomeIDs <- reactomePATHNAME2ID # maps Reactome path identifiers to reactomeIDs
+entrezGenes <- reactomePATHID2EXTID # maps reactome IDs to Entrez gene names
+entrez_to_ID <- reactomeEXTID2PATHID
+path_ID_to_name <- reactomePATHID2NAME
+go_to_reactome <- reactomeGO2REACTOMEID
+```
+
+```{r}
+# GO innate: GO:0045087
+
+xx <- c(unique(as.list(reactomeGO2REACTOMEID$`GO:0045087`)))
+#reactome_innate_path <- c(as.list(reactomePATHID2NAME$`R-HSA-168249`)) # pathway name
+ID <- xx[[1]]
+reactome_innate_genes <- entrezGenes[[ID]]
+
+# set up df to store genes and paths
+col_labels <- c("Symbol", "ReactomePathwayInnate", "ReactomePathIDInnate", "ReactomeDB")
+reactome_innate_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(reactome_innate_df) <- col_labels
+
+for(g in reactome_innate_genes){
+    if(g %in% gene_human$GeneID){
+      sym_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+      name_path <- path_ID_to_name[[ID]]
+      new_line <- c(sym_gene, name_path, ID, 1)
+      reactome_innate_df[nrow(reactome_innate_df) + 1,] <- new_line
+      
+    }
+}
+
+reactome_innate_df$isInnateReactome <- 1
+
+```
+
+```{r}
+# GO adaptive: GO:0002250
+
+xx <- c(unique(as.list(reactomeGO2REACTOMEID$`GO:0002250`)))
+ID <- xx[[1]]
+reactome_adaptive_genes <- entrezGenes[[ID]]
+
+# set up df to store genes and paths
+col_labels <- c("Symbol", "ReactomePathwayAdaptive", "ReactomePathIDAdaptive", "ReactomeDB")
+reactome_adapt_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(reactome_adapt_df) <- col_labels
+
+for(g in reactome_adaptive_genes){
+    if(g %in% gene_human$GeneID){
+      sym_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+      name_path <- path_ID_to_name[[ID]]
+      new_line <- c(sym_gene, name_path, ID, 1)
+      reactome_adapt_df[nrow(reactome_adapt_df) + 1,] <- new_line
+      
+    }
+}
+
+reactome_adapt_df$isAdaptiveReactome = 1
+```
+
+```{r}
+# GO general immunity: GO:0006955
+
+xx <- c(unique(as.list(reactomeGO2REACTOMEID$`GO:0006955`)))
+#reactome_other_genes <- entrezGenes[[xx[[1]]]]
+```
+
+```{r}
+reactome_df <- full_join(reactome_innate_df, reactome_adapt_df)
+
+reactome_df$isInnateReactome[is.na(reactome_df$isInnateReactome)] = 0
+reactome_df$isAdaptiveReactome[is.na(reactome_df$isAdaptiveReactome)] = 0
+```
+
+```{r}
+# read in the other immune data
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", 
+                         sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+
+all_db_df <- full_join(immune_data, reactome_df, by = "Symbol") %>% distinct()
+
+all_db_df$GO[is.na(all_db_df$GO)] = 0
+all_db_df$KEGG[is.na(all_db_df$KEGG)] = 0
+all_db_df$InnateDB[is.na(all_db_df$InnateDB)] = 0
+all_db_df$ReactomeDB[is.na(all_db_df$ReactomeDB)] = 0
+
+all_db_df$isInnateGO[is.na(all_db_df$isInnateGO)] = 0
+all_db_df$isInnateKEGG[is.na(all_db_df$isInnateKEGG)] = 0
+all_db_df$isInnateInnateDB[is.na(all_db_df$isInnateInnateDB)] = 0
+all_db_df$isInnateReactome[is.na(all_db_df$isInnateReactome)] = 0
+
+all_db_df$isAdaptiveGO[is.na(all_db_df$isAdaptiveGO)] = 0
+all_db_df$isAdaptiveKEGG[is.na(all_db_df$isAdaptiveKEGG)] = 0
+all_db_df$isAdaptiveReactome[is.na(all_db_df$isAdaptiveReactome)] = 0
+
+all_db_df$isOtherGO[is.na(all_db_df$isOtherGO)] = 0
+
+# configure the data for the elongation
+#all_db_df$isInnateGO <- as.character(all_db_df$isInnateGO)
+#all_db_df$isAdaptiveGO <- as.character(all_db_df$isAdaptiveGO)
+#all_db_df$isInnateKEGG <- as.character(all_db_df$isInnateKEGG)
+#all_db_df$isAdaptiveKEGG <- as.character(all_db_df$isAdaptiveKEGG)
+#all_db_df$isInnateReactome <- as.character(all_db_df$isInnateReactome)
+#all_db_df$isAdaptiveReactome <- as.character(all_db_df$isAdaptiveReactome)
+#all_db_df$isInnateInnateDB <- as.character(all_db_df$isInnateInnateDB)
+
+db_subset <- dplyr::select(all_db_df, c(Symbol, isInnateGO, isAdaptiveGO, 
+                                        isInnateKEGG, isAdaptiveKEGG, isInnateInnateDB, 
+                                        isInnateReactome, isAdaptiveReactome))
+  
+# elongate data
+pivot_db <- pivot_longer(db_subset, 
+                         cols = -Symbol,
+                         names_to = "label",
+                         values_to = "placement")
+pivot_db <- pivot_db %>%
+  filter(placement == 1) %>%
+  dplyr::select(c(Symbol, label))
+
+pivot_db <- pivot_db[,c("label","Symbol")]
+
+```
+
+
+
+
+```{r}
+# read in disease data
+# GDA
+GDA_data = fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new.tsv') # has isAutoimmune col
+GDA_auto <- GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+
+```
+
+# bring db and disease data together
+```{r}
+colnames(GDA_auto) <- c("label","Symbol")
+
+long_data <- rbind(pivot_db, GDA_auto)
+fwrite(long_data, "long_db_auto_disease.csv")
+
+
+```
+
+# Calculate all separation
+```{r}
+library(NetSci)
+#long_data <- long_data[,c("Symbol","label")]
+# separation between all FOUR databases
+SAB = separation_Significance(G = ppi_g, ST = long_data,
+                              correct_by_target = F,
+                              Threads = 12)
+fwrite(SAB, "long_data_separation.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

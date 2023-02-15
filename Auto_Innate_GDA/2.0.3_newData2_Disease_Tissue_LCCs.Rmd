@@ -1,0 +1,382 @@
+---
+title: "2.0.3_newData_Disease_Tissue_LCCs"
+author: "Ursula Widocki"
+date: "4/3/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(magrittr)
+library(igraph)
+library(ggraph)
+library(NetSci)
+library(patchwork)
+library(Cairo)
+
+`%ni%` <- Negate(`%in%`)
+
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+```
+
+# Read in data
+```{r}
+## Read in data
+# new PPI
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+# new GDA
+GDA_data = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new2.tsv") # has isAutoimmune col
+# select disease that have some form of Strong or Weak evidence and have more than 5 disease genes
+GDA_auto = GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name) %>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+
+## Read in autoimmune disease data to get dis with stat signif module
+autoimmune_LCC_df = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs_new2.tsv", 
+                               sep = "\t", stringsAsFactors = F, header = T)
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+
+autoimmune_LCC_df <- autoimmune_LCC_df %>% 
+  mutate(padj = p.adjust(p_val, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05"))
+
+signif_dis <- autoimmune_LCC_df %>%
+  filter(padj < 0.05)
+signif_dis <- signif_dis$Disease
+
+# Tissue GTeX
+#tissue_dat <- fread("~/DE_glmm_tissue_genes_GTEx.csv")
+tissue_dat <- fread("~/Desktop/BarabasiLab/Data/Diffexpressed_log.csv")
+tissue_dat <- tissue_dat %>%
+  filter(p_adj < 0.05)
+```
+
+
+# calc disease tissue LCCs
+```{r}
+## Tissue LCCs of diseases
+
+tissues = unique(tissue_dat$term)
+tissue_LCC = list()
+reps = 1000
+pb <- txtProgressBar(min = 0, max = length(tissues), style = 3)
+final_LCCs = list()
+
+for(i in 1:length(tissues)){
+  setTxtProgressBar(pb, i)
+  tiss =  tissues[i]
+  genes_in_tissue = tissue_dat %>% filter(term == tiss) %>%
+    filter(HGNC_Symbol %in% V(ppi_g)$name) %>% 
+    pull(HGNC_Symbol)
+  
+  n_genes_tissue = length(genes_in_tissue)
+  
+  tissue_ppi = ppi_g %>% induced_subgraph(., genes_in_tissue)
+  
+  out = list()
+  for(j in 1:length(signif_dis)){
+    genes_disease = GDA_auto %>%
+      filter(NewName %in% signif_dis[j]) %>%
+      filter(HGNC_Symbol %in% V(tissue_ppi)$name)
+    n_genes_disease_tissue  = nrow(genes_disease)
+    
+    if(n_genes_disease_tissue > 0){
+      LCC_disease_tissue = NetSci::LCC_Significance(N = reps, 
+                                                    Targets = genes_disease$HGNC_Symbol, 
+                                                    G = tissue_ppi,
+                                                    bins = 1
+      )
+      
+      # store data
+      tmp = data.frame(Disease_Name = signif_dis[j], 
+                       Tissue = tiss, 
+                       Tissue_Genes = n_genes_tissue, 
+                       Disease_Tissue_Genes = n_genes_disease_tissue, 
+                       
+                       LCC_size = LCC_disease_tissue$LCC, 
+                       LCC_p = LCC_disease_tissue$emp_p)
+      
+      out[[j]] = tmp
+    } else {
+      
+      tmp = data.frame(Disease_Name = signif_dis[j], 
+                       Tissue = tiss, 
+                       Tissue_Genes = n_genes_tissue, 
+                       Disease_Tissue_Genes = n_genes_disease_tissue, 
+                       
+                       LCC_size = 0, 
+                       LCC_p = 1)
+      
+      out[[j]] = tmp
+    }
+  }  
+  final_LCCs[[i]] = out %<>% bind_rows()
+}
+
+final_LCCs %<>% bind_rows()
+```
+# Adjust p-values
+```{r}
+data <- final_LCCs
+
+get_total_genes <- autoimmune_LCC_df[,c("Disease","num_genes")]
+colnames(get_total_genes)[1] <- "Disease_Name"
+
+data <- full_join(data, get_total_genes)
+
+data %<>%
+  mutate(padj = p.adjust(LCC_p, method = "fdr")) %>%
+  mutate(Significance = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05")) %>%
+  mutate(rLCC = (LCC_size/num_genes)*100) %>%
+  mutate(rLCC_50 = ifelse(rLCC > 50, "big rLCC", "small rLCC")) %>%
+  mutate(shape = ifelse(padj < 0.05, 1, 4))
+data$Tissue <- gsub("SMTSD", "", data$Tissue)  
+
+```
+
+```{r}
+write.table(data, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/Disease_Tissue_LCCs_GTEx_log_DEgenes2.tsv", row.names = F, col.names = T, sep = "\t")
+```
+
+```{r}
+data <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Disease_Tissue_LCCs_GTEx_log_DEgenes2.tsv")
+```
+
+
+```{r}
+p1 <- data %>%
+  filter(Disease_Name %in% signif_dis) %>%
+  ggplot() +
+  aes(x = Disease_Name, 
+      y = Tissue, 
+      color = Significance,
+      size = rLCC,
+      shape = Significance) +
+  geom_point() +
+  scale_color_manual(values = c("padj < 0.05" = "#007CBE", "padj > 0.05" = "grey80")) +
+  #scale_color_distiller(palette = "YlGnBu",
+  #                      direction = 1) +
+  # add ggnewscale to plot the red Xs
+  scale_shape_manual(values = c(16, 1)) +
+  scale_size(range = c(0.1, 5)) + 
+  labs(x = "Autoimmune Disease") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90), 
+        legend.position = "bottom", 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        text = element_text(size = 20))
+
+# Disease bar plot
+temp <- data %>%
+  filter(Disease_Name %in% signif_dis) %>% 
+  filter(padj < 0.05) %>% # uveitis dropped here
+  group_by(Disease_Name) %>% 
+  dplyr::summarise(n=n())
+# uveitis is getting filtered out since no signif LCCs, so we need to add it back
+temp <- rbind(temp, c("agammaglobulinemia", 0)) %>% as.data.frame()
+temp <- rbind(temp, c("narcolepsy", 0)) %>% as.data.frame()
+temp <- rbind(temp, c("idiopathic pulmonary fibrosis", 0)) %>% as.data.frame()
+temp$n <- as.integer(temp$n)
+
+p3 <- temp %>%
+  ggplot() +
+  aes(x = Disease_Name, y = n) +
+  geom_bar(fill = "#122265", stat = "identity") + #position = position_dodge(preserve = "single")
+  theme_minimal() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  labs(y = "LCC count")
+
+
+# Tissue bar plot
+p2 <- data %>%
+  filter(Disease_Name %in% signif_dis) %>% 
+  filter(padj < 0.05) %>% 
+  group_by(Tissue) %>% 
+  dplyr::summarise(n=n()) %>%
+  ggplot() +
+  aes(x = Tissue, weight = n) +
+  geom_bar(fill = "#122265") + # "#333366"
+  labs(y = "LCC count") +
+  theme_minimal() +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
+  coord_flip()
+
+
+CairoPDF("~/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Disease-Tissue_LCC_logDE2.pdf", width = 25, height = 20)
+# patchwork things together
+
+((p3 + plot_spacer() + plot_layout(widths = c(5,1))) / ((p1 + p2) + plot_layout(widths = c(5,1))))+ plot_layout(heights = c(1,6))
+
+dev.off()
+
+#p1
+```
+
+
+
+
+
+# Make a sankey plot
+
+```{r}
+library(ggsankey)
+
+data %<>% arrange(prop_lcc)
+data$Disease = factor(row.names(data), 
+                                   levels = row.names(data))
+data_long <- make_long(data, Disease_Name, Tissue, value = prop_lcc)
+
+ggplot(data_long, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = factor(node),
+               label = node)) +
+  geom_sankey(aes(width = value), flow.alpha = .6,
+              node.color = "gray30") +
+  geom_sankey_label(size = 3, color = "white", fill = "gray40") +
+  labs(x = NULL) +
+  theme_sankey(base_size = 16) +
+  theme(legend.position = "none")
+```
+
+```{r}
+library(UpSetR)
+tissue_dat$term <- gsub("SMTSD", "", tissue_dat$term) 
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/logNorm_DE_Tissue_genes_UpSet.pdf", 
+         width = 35, height = 25)
+
+tissue_dat %>%
+   filter(p_adj < 0.05) %>%
+   select(HGNC_Symbol, term) %>%
+   mutate(term = stringr::str_remove(term, "tissue")) %>%
+   ungroup() %>% 
+   pivot_wider(names_from = term, 
+               values_from = term, 
+               values_fn = length, 
+               values_fill = 0) %>%
+   as.data.frame() %>% 
+   UpSetR::upset(.,nsets = 56, 
+                 order.by =  "freq",
+                 text.scale = 3, point.size=3)
+
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+```{r}
+# make Sankey plot... but cannot save as pdf
+library(networkD3)
+
+brain <- c("Brain Amygdala","Brain Anterior cingulate cortex BA24","Brain Caudate basal ganglia","Brain Cerebellar Hemisphere",
+           "Brain Cerebellum" ,"Brain Cortex" ,"Brain Frontal Cortex BA9","Brain Hippocampus" , "Brain Hypothalamus",                    "Brain Nucleus accumbens basal ganglia", "Brain Putamen basal ganglia" ,"Brain Spinal cord cervical c 1", "Brain Substantia nigra")
+
+data %<>% arrange(LCC_size)
+data$Disease = factor(row.names(data), 
+                                   levels = row.names(data))
+
+g_tiss_dis <- data %>%
+  filter(padj < 0.05) %>%
+  select(c("Disease_Name", "Tissue", "LCC_size")) %>%
+  filter(Tissue %ni% brain) %>%
+  graph.data.frame(., directed = F)
+tiss_dis_matrix <- get.adjacency(g_tiss_dis, sparse = FALSE, attr='LCC_size')
+g_tiss_dis = graph_from_adjacency_matrix(tiss_dis_matrix, mode = "undirected", weighted = T)
+
+
+
+
+clust <- cluster_walktrap(g_tiss_dis)
+members <- membership(clust)
+g_tiss_dis_D3 <- igraph_to_networkD3(g_tiss_dis, group = members)
+myColors <-rep(c("tomato3","green"), times=c(21,38))
+# sankeyNetwork()
+sankeyNetwork(Links = g_tiss_dis_D3$links, Nodes = g_tiss_dis_D3$nodes, Source = "source",
+             Target = "target", Value = "value", NodeID = "name",
+             colourScale = myColors,
+             fontSize = 18, nodeWidth = 30)
+```
+
+
+```{r}
+URL <- paste0(
+        "https://cdn.rawgit.com/christophergandrud/networkD3/",
+        "master/JSONdata/energy.json")
+Energy <- jsonlite::fromJSON(URL)
+# Plot
+sankeyNetwork(Links = Energy$links, Nodes = Energy$nodes, Source = "source",
+             Target = "target", Value = "value", NodeID = "name",
+             units = "TWh", fontSize = 12, nodeWidth = 30)
+```
+
+
+
+# Old Code ######################################################################################
+
+```{r}
+# filter out genes that are not assoc with any diseases
+#tissue_dat <- tissue_dat %>% select(-Name) %>% filter(Description %in% V(ppi_g)$name)
+# if there is a duplicate, take the sum of their collective expression values
+summary_gtex = tissue_dat %>% 
+  pivot_longer(-c(1)) %>%
+  #filter(value > 0) %>% 
+  group_by(name, Description) %>%
+  summarise(sum = sum(value)) %>% 
+  mutate(Q50 = quantile(sum, 0.50))
+# Clean up tissue names in data
+summary_gtex$name = summary_gtex$name %>%
+  stringr::str_replace_all(., "\\.", " ") %>%
+  stringr::str_squish()
+summary_gtex %<>% filter(name %ni% c("Cells EBV transformed lymphocytes", "Cells Cultured fibroblasts", "Nerve Tibial"))
+
+
+```
+
+
+
+
+
+
+
+
+
+
+

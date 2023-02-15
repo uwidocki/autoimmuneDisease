@@ -1,0 +1,163 @@
+---
+title: "0_Immune_Diseases"
+author: "Ursula Widocki"
+date: "6/2/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+library(MeSH.db)
+library(MeSH.AOR.db)
+library(eulerr)
+library(gprofiler2) # gene enrichment
+#library(stringdist)
+library(dplyr)
+library(stringr)
+
+set.seed(123) # for venn diagrams
+
+```
+
+```{r}
+GDA_data <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_data.csv", sep = ",", header = T, stringsAsFactors = F)
+GDA_data = GDA_data %>% filter(Strong > 0 | Weak > 0) %>% mutate(NewName = tolower(NewName)) %>% 
+  mutate(DescriptorName = tolower(DescriptorName)) %>% unique()
+
+GDA_auto <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto.csv", sep = ",", header = T, stringsAsFactors = F) %>% mutate(DescriptorName = tolower(DescriptorName)) %>% unique()
+  
+```
+
+```{r}
+# get diseases with "immune" in DescriptorName
+
+GDA_immune_subset = GDA_data %>% filter(str_detect(DescriptorName, "immune"))
+
+# make sure all autoimmune diseases are in list
+
+GDA_temp_immune_set = GDA_immune_subset$NewName %>% unique()
+GDA_auto_disease_list = GDA_auto$NewName %>% unique()
+
+#length(interaction(GDA_auto_disease_list, GDA_auto_disease_list)) # 72, so all auto are in immune
+
+all_immune_dis = union(GDA_temp_immune_set, GDA_auto_disease_list)
+
+GDA_immune = GDA_data[GDA_data$NewName %in% all_immune_dis,] %>% unique()
+
+```
+
+```{r}
+sort(GDA_immune$NewName %>% unique())
+
+```
+
+```{r}
+write.table(GDA_immune, file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_immune.csv", sep = ",", row.names = F, col.names = T)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Get Immune System diseases from MeSH
+```{r}
+## Filter by Immune System Disease
+
+immune_dis_key <- "D007154"
+
+# gets meshids of autoimmune diseases
+dis_ids <- MeSHDbi::select(MeSH.AOR.db, keys = immune_dis_key, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+dis_ids_2 <- MeSHDbi::select(MeSH.AOR.db, keys = dis_ids$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+dis_ids_3 <- MeSHDbi::select(MeSH.AOR.db, keys = dis_ids_2$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+dis_ids_4 <- MeSHDbi::select(MeSH.AOR.db, keys = dis_ids_3$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+dis_ids_5 <- MeSHDbi::select(MeSH.AOR.db, keys = dis_ids_4$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR") 
+dis_ids_6 <- MeSHDbi::select(MeSH.AOR.db, keys = dis_ids_5$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+dis_ids_7 <- MeSHDbi::select(MeSH.AOR.db, keys = dis_ids_6$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+dis_ids_8 <- MeSHDbi::select(MeSH.AOR.db, keys = dis_ids_7$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+#dis_ids_9 <- MeSHDbi::select(MeSH.AOR.db, keys = dis_ids_8$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR") # 0, so last one to get offspring terms
+
+all_terms <- rbind(dis_ids, dis_ids_2) %>% rbind(., dis_ids_3) %>% rbind(., dis_ids_4) %>% 
+  rbind(., dis_ids_5) %>% rbind(., dis_ids_6) %>% rbind(., dis_ids_7) %>% rbind(., dis_ids_8)
+
+```
+
+```{r}
+# Gets names of autoimmune diseases
+parent_names <- MeSHDbi::select(MeSH.db, keys = all_terms$ANCESTOR, columns = c("MESHTERM"), keytype = "MESHID")
+offspring_names <- MeSHDbi::select(MeSH.db, keys = all_terms$OFFSPRING, columns = c("MESHTERM"), keytype = "MESHID")
+
+# make df of all names of autoimmune diseases
+all_terms <- rbind(parent_names, offspring_names) %>% mutate(MESHTERM = tolower(MESHTERM)) %>% unique()
+
+```
+
+
+```{r}
+# from all disease names, remove roots
+
+remove = c()
+
+```
+
+
+```{r}
+# Gets synonyms
+
+raw_terms = rbind(parent_names, offspring_names)
+
+# get synonyms
+syns <- MeSHDbi::select(MeSH.db, keys = raw_terms$MESHTERM, columns = c("MESHTERM", "SYNONYM"), keytype = "MESHTERM")
+
+all_syns <- syns %>% mutate(MESHTERM = tolower(MESHTERM)) %>% mutate(SYNONYM = tolower(SYNONYM))
+
+syn_df = all_syns$SYNONYM %>% as.data.frame(., stringsAsFactors = F)
+syn_list = c()
+for(i in seq(1:dim(syn_df)[1])){
+ syn_list = c(syn_list, strsplit(syn_df[i,1],  "\\|"))
+}
+
+syn_list = unlist(syn_list) %>% unique()
+
+```
+
+# Get immune system diseases from ReactomeDB
+
+
+```{r}
+# https://www.ncbi.nlm.nih.gov/books/NBK22243/
+
+# Asthma, Ataxia telangiectasia, Autoimmune polyglandular syndrome, Burkitt lymphoma, Diabetes, type 1, DiGeorge syndrome, Familial Mediterranean fever, Immunodeficiency with hyper-IgM, Leukemia, chronic myeloid, Severe combined immunodeficiency
+
+```
+
+
+
+
+
+
+
+
+
+

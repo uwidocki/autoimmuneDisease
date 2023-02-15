@@ -1,0 +1,83 @@
+---
+title: "tryNewData"
+author: "Ursula Widocki"
+date: "4/9/2022"
+output: html_document
+---
+
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+library(igraph)
+library(magrittr)
+library(ggraph)
+library(NetSci)
+source("/Users/ursulawidocki/Desktop/BarabasiLab//NetMedTools.R")
+```
+
+```{r}
+GDA_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_Complete_04042022.csv", 
+                        sep = ",", stringsAsFactors = F, header = T)
+
+final_auto_list <- c(read_tsv(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/autoimmune_disease_naming_scheme.txt", 
+                                col_names = F, col_types = cols())) %>% unlist()
+```
+
+```{r}
+temp <- GDA_data %>%
+  filter(NewName %in% final_auto_list)
+
+length(unique(temp$NewName))
+
+final_auto_list[which(final_auto_list %ni% temp$NewName)] # all diseases are there!
+
+```
+```{r}
+# Read in PPI data
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+```{r}
+disease_gene_assoc <- GDA_data %>%
+  filter(NewName %in% final_auto_list) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique() %>%
+  group_by(NewName) %>%
+  summarize(n = n())
+rownames(disease_gene_assoc) <- disease_gene_assoc$NewName
+
+disease_gene_assoc %<>%
+  arrange(n)
+disease_gene_assoc$NewName = factor(row.names(disease_gene_assoc), levels = row.names(disease_gene_assoc))
+ggplot(disease_gene_assoc) +
+  aes(x = NewName, y = n) +
+  geom_point(shape = "circle", fill = "tomato1", color = "tomato1", alpha = 0.4) +
+  labs(title = "Number of Disease Genes per Autoimmune Disease", x = "Autoimmune Disease", y = "Number of Disease Genes") +
+  theme_minimal() +
+  theme(text = element_text(size = 15)) +
+  coord_flip()
+```
+
+
+
+

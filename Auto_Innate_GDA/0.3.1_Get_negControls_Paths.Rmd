@@ -1,0 +1,115 @@
+---
+title: "0.3.1_paths_negControls"
+author: "Ursula Widocki"
+date: "7/2/2021"
+output: html_document
+---
+
+###################################################################################################################################
+# This file gets the negative controls for semantic clustering between databases
+# Get all pathways an immunity gene is associate with
+###################################################################################################################################
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+```
+
+```{r}
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", 
+                         sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+
+# for GO
+gene2go <- fread(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/gene2go")
+# http://geneontology.org/docs/guide-go-evidence-codes/
+evid = c("EXP", "IDA", "IPI", "IMP", "IGI", "IEP", "HTP", "HDA", "HMP", "HGI", "HEP", "IBA", "IBD", "IKR", "IRD")
+gene2go = gene2go %>%
+  filter(`#tax_id` == 9606) %>%
+  filter(Evidence %in% evid) %>%
+  unique()
+
+# for KEGG
+library(KEGGREST)
+library(KEGG.db)
+database = "pathway"
+library(org.Hs.eg.db)
+
+# for ReactomeDB
+library(reactome.db)
+reactomeIDs <- reactomePATHNAME2ID # maps Reactome path identifiers to reactomeIDs
+entrezGenes <- reactomePATHID2EXTID # maps reactome IDs to Entrez gene names
+entrez_to_ID <- reactomeEXTID2PATHID
+path_ID_to_name <- reactomePATHID2NAME
+
+# where the Entrez to gene symbol conversion is coming from
+gene_human <- read_csv("/Users/ursulawidocki/Desktop/BarabasiLab/Data/gene_human.csv")
+gene_human <- gene_human[,2:3]
+
+```
+
+```{r}
+# Gets GO Negative Controls
+
+go_df = immune_data %>%
+  filter(GO == 1) %>%
+  select(Symbol, GO, GOPathIDInnate, GOPathIDAdaptive, GOPathIDOther) %>%
+  unique()
+go_genes = unique(go_df$Symbol)
+go_paths = unique(c(go_df$GOPathIDInnate, go_df$GOPathIDAdaptive, go_df$GOPathIDOther))
+
+gene2go = merge(gene2go, gene_human)
+neg_go = gene2go %>%
+  filter(Symbol %in% go_genes) %>%
+  filter(GO_ID %ni% go_paths) %>%
+  select(Symbol, GO_ID, GO_term) %>%
+  unique()
+  
+```
+
+
+```{r}
+# Gets KEGG Negative Controls 
+kegg_df = immune_data %>%
+  filter(KEGG == 1) %>%
+  select(Symbol, KEGG, KEGGPathIDAdaptive, KEGGPathIDInnate) %>%
+  unique()
+kegg_df$KEGGPathIDAdaptive <- sub(pattern = "hsa", replacement = "", as.character(kegg_df$KEGGPathIDAdaptive), fixed = T)
+kegg_df$KEGGPathIDInnate <- sub(pattern = "hsa", replacement = "", as.character(kegg_df$KEGGPathIDInnate), fixed = T)
+#kegg_df$KEGGPathIDAdaptive = as.numeric(kegg_df$KEGGPathIDAdaptive)
+#kegg_df$KEGGPathIDInnate = as.numeric(kegg_df$KEGGPathIDInnate)
+
+kegg_genes = unique(kegg_df$Symbol)
+kegg_entrez = gene_human[gene_human$Symbol %in% kegg_genes,]
+kegg_paths = unique(c(kegg_df$KEGGPathIDAdaptive, kegg_df$KEGGPathIDInnate))
+
+xx <- as.list(org.Hs.egPATH2EG)
+# Remove pathway identifiers that do not map to any entrez gene id
+
+gene_to_path <- KEGGEXTID2PATHID
+
+
+#for(ind in 1:length(xx)){
+#for(ind in 1:5){
+#  print(xx$temp)
+  
+#}
+```
+
+```{r}
+# Gets ReactomeDB Negative Controls
+
+# filter from immune_data
+# merge Entrez from gene_human
+# use Entrez to search from entrez_to_ID <- reactomeEXTID2PATHID
+# then, use path_ID_to_name <- reactomePATHID2NAME at the end
+
+```
+
+
+
+
+
+
+
+

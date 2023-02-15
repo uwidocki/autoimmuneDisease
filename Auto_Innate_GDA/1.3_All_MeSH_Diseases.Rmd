@@ -1,0 +1,172 @@
+---
+title: "1.3_All_Diseases"
+author: "Ursula Widocki"
+date: "5/17/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+library(dplyr)
+library(stringr)
+library(superheat)
+source("/Users/ursulawidocki/Desktop/BarabasiLab//NetMedTools.R")
+```
+
+
+```{r}
+GDA_data <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/GDA_18122020_ClassFromDisGeNet.csv", sep = ",", header = T, stringsAsFactors = F)
+GDA_data = GDA_data %>% filter(Strong > 0 | Weak > 0) %>% mutate(DiseaseName = tolower(DiseaseName)) %>% unique()
+
+all_innate_genes_df <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/all_genes.tsv", header = T, sep = "\t", stringsAsFactors = F)
+
+ppi_df <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df <- ppi_df[,c("Symbol_A", "Symbol_B")]
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g = ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+```{r}
+# Make disease names compatible with autoimmune disease name details
+
+# Change "behcets disease" and "behcet syndrome" the same name (change all to "behcets disease")
+GDA_data$DiseaseName <- lapply(GDA_data$DiseaseName, gsub, pattern = "behcet syndrome", replacement = "behcets disease", fixed = TRUE)
+
+# Change "psoriasis" and "psoriasis vulgaris" all as "psoriasis"
+GDA_data$DiseaseName <- lapply(GDA_data$DiseaseName, gsub, pattern = "psoriasis vulgaris", replacement = "psoriasis", fixed = TRUE)
+
+# Change "hashimoto disease", "autoimmune thyroid disease", "thyroiditis autoimmune" as "hashimoto disease"
+GDA_data$DiseaseName <- lapply(GDA_data$DiseaseName, gsub, pattern = "autoimmune thyroid disease", 
+                               replacement = "hashimoto disease", fixed = TRUE)
+GDA_data$DiseaseName <- lapply(GDA_data$DiseaseName, gsub, pattern = "autoimmune thyroid disease", 
+                               replacement = "hashimoto disease", fixed = TRUE)
+
+# Change "arthritis juvenile", "oligoarticular juvenile idiopathic arthritis", "rheumatoid factor negative juvenile idiopathic arthritis", "systemic juvenile chronic arthritis", "juvenile still disease" as "juvenile arthritis"
+GDA_data$DiseaseName <- lapply(GDA_data$DiseaseName, gsub, pattern = "arthritis juvenile", replacement = "juvenile arthritis", fixed = TRUE)
+GDA_data$DiseaseName <- lapply(GDA_data$DiseaseName, gsub, pattern = "oligoarticular juvenile idiopathic arthritis", 
+                               replacement = "juvenile arthritis", fixed = TRUE)
+GDA_data$DiseaseName <- lapply(GDA_data$DiseaseName, gsub, pattern = "rheumatoid factor negative juvenile idiopathic arthritis", 
+                               replacement = "juvenile arthritis", fixed = TRUE)
+GDA_data$DiseaseName <- lapply(GDA_data$DiseaseName, gsub, pattern = "systemic juvenile chronic arthritis", 
+                               replacement = "juvenile arthritis", fixed = TRUE)
+GDA_data$DiseaseName <- lapply(GDA_data$DiseaseName, gsub, pattern = "juvenile still disease", 
+                               replacement = "juvenile arthritis", fixed = TRUE)
+
+# Change "scleroderma systemic", "scleroderma limited", "limited cutaneous systemic scleroderma" to "scleroderma systemic"
+GDA_data$DiseaseName <- lapply(GDA_data$DiseaseName, gsub, pattern = "scleroderma limited", 
+                               replacement = "scleroderma systemic", fixed = TRUE)
+GDA_data$DiseaseName <- lapply(GDA_data$DiseaseName, gsub, pattern = "limited cutaneous systemic scleroderma", 
+                               replacement = "scleroderma systemic", fixed = TRUE)
+
+GDA_data %<>% unique()
+```
+
+# Calculate separation for each disease present in GDA
+
+```{r}
+# Get diseases with significant LCCs
+```
+
+
+```{r}
+# Separation between diseases with significant LCCs
+
+genes_and_names = GDA_data[,c("hgnc_symbol", "DiseaseName")]
+colnames(genes_and_names) = c("Genes", "Label")
+genes_and_names = genes_and_names[genes_and_names$Genes %in% V(ppi_g)$name,]
+
+
+genes_labels_innate = all_genes_df[,c("Symbol", "GO")]
+genes_labels_innate$Label = "All Innate"
+colnames(genes_labels_innate)[1] = "Genes"
+genes_labels_innate = genes_labels_innate[, c("Genes", "Label")]
+genes_labels_innate = genes_labels_innate[genes_labels_innate$Genes %in% V(ppi_g)$name,] %>% unique()
+
+sep_labels = rbind(genes_and_names, genes_labels_innate)
+
+sep_all_diseases = module_sep(ppi_g, sep_labels)
+
+sab_all = sep_all_diseases$Sab
+sab_all[is.na(sab_all)] <- 0 # make NA 0
+sab_all = sab_all + t(sab_all)
+
+superheat(sab_all, pretty.order.rows = T, pretty.order.cols = T, bottom.label.text.angle = 90)
+```
+
+```{r}
+# Which diseases are close to innate immunity
+
+from_innate = sab_all[,which(colnames(sab_all) == "All Innate")]
+
+which(from_innate < 0) # breast neoplasms, depressive disorder, diabetes mellitus, liver cirrhosis, prostatic neoplasms, rheumatoid arthritis, schizophrenia
+
+```
+
+
+# Which diseases are close to innate immunity?
+```{r}
+look_dis = c("breast neoplasms", "depressive disorder", "diabetes mellitus", "liver cirrhosis", "prostatic neoplasms", "rheumatoid arthritis", "schizophrenia", "inflammatory bowel disease", "crohn disease", "psoriasis")
+
+genes_and_names = GDA_data[GDA_data$DiseaseName %in% look_dis, c("hgnc_symbol", "DiseaseName")]
+colnames(genes_and_names) = c("Genes", "Label")
+genes_and_names = genes_and_names[genes_and_names$Genes %in% V(ppi_g)$name,]
+
+
+genes_labels_innate = all_genes_df[,c("Symbol", "GO")]
+genes_labels_innate$Label = "All Innate"
+colnames(genes_labels_innate)[1] = "Genes"
+genes_labels_innate = genes_labels_innate[, c("Genes", "Label")]
+genes_labels_innate = genes_labels_innate[genes_labels_innate$Genes %in% V(ppi_g)$name,] %>% unique()
+
+sep_labels = rbind(genes_and_names, genes_labels_innate)
+
+sep_all_diseases = module_sep(ppi_g, sep_labels)
+
+sab_all = sep_all_diseases$Sab
+sab_all[is.na(sab_all)] <- 0 # make NA 0
+sab_all = sab_all + t(sab_all)
+
+superheat(sab_all, pretty.order.rows = T, pretty.order.cols = T, bottom.label.text.angle = 90, heat.pal = c("blue", "white", "red"), left.label.text.size = 3, bottom.label.text.size = 3, heat.pal.values = c(0, 0.8, 1) )
+
+```
+
+```{r}
+# net viz of diseases
+
+close_diseases = c("breast neoplasms", "depressive disorder", "diabetes mellitus", "liver cirrhosis", "prostatic neoplasms", "rheumatoid arthritis", "schizophrenia", "All Innate")
+
+sep_close = sab_all[rownames(sab_all) %in% close_diseases, colnames(sab_all) %in% close_diseases]
+
+g = graph_from_adjacency_matrix(abs(sep_close), mode = "undirected", weighted = TRUE)
+g = delete.edges(g, E(g)[E(g)$weight == 0])
+E(g)$width = E(g)$weight * 10
+V(g)$size = strength(g) * 50
+
+V(g)$color = V(g)$frame.color = "#2a9d8f"
+V(g)$label.color = "#264653"
+E(g)$color = "#f4a261"
+
+plot(g)
+
+```
+
+
+
+
+
+
+
+
+

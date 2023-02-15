@@ -1,0 +1,66 @@
+---
+title: "0.3.2_Pathway_Analysis"
+author: "Ursula Widocki"
+date: "7/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+```
+
+```{r}
+# packages
+```
+
+```{r}
+# files
+```
+
+```{r}
+# Calculate Jaccard sim for paths in GO, KEGG, and ReactomeDB
+```
+
+```{r}
+# How many pathways have a sim of 0.5 or greater?
+
+# What is the range of values and distribution
+```
+
+```{r}
+# Now look at these values when you group them in innate, adapt, both, other
+```
+
+```{r}
+# If the path  has more than 5 genes and makes a significant LCC, save it's name
+
+# Calculate S_ab separation between these paths
+
+```
+
+
+
+## Using only GO, KEGG, and Reactome, how do gene sets of pathways between databases compare?
+# if the Jaccard index is 0.5 or greater, keep those values and look at the path names
+```{r}
+
+```
+
+
+##################### SEMANTIC ANALYSIS
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+

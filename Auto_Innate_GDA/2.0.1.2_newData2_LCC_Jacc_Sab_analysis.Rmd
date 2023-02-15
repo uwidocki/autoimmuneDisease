@@ -1,0 +1,488 @@
+---
+title: "2.0.1.2_newData2_LCC_Jacc_Sab_analysis"
+author: "Ursula Widocki"
+date: "4/22/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+library(igraph)
+library(magrittr)
+library(ggraph)
+library(superheat)
+library(NetSci)
+library(patchwork)
+library(Cairo)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+```
+
+```{r}
+# Read in PPI data
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = igraph::degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+# GDA
+GDA_data = fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new2.tsv') # has isAutoimmune col
+GDA_auto <- GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+
+
+# LCCs
+autoimmune_LCC_df = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs_new2.tsv")
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+autoimmune_LCC_df$rLCC <- autoimmune_LCC_df$rLCC * 100
+
+# Jacc and Separation calcs
+jacc_sep_full <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Autoimmune_jacc_sep2.tsv")
+```
+
+```{r}
+# Vizualize the disease LCCs and p-value
+
+autoimmune_LCC_df %<>%
+  arrange(desc(padj))
+autoimmune_LCC_df$Disease = factor(row.names(autoimmune_LCC_df), 
+                                   levels = row.names(autoimmune_LCC_df))
+  
+plt1 <- ggplot(autoimmune_LCC_df) +
+  aes(x = Disease, y = -log10(padj), colour = signif, size = LCCsize) +
+  geom_point(shape = "circle", alpha = 0.5) +
+  scale_size(range = c(0, 10)) +
+  labs(x = "Disease", y = "-log10 adj p-value", title = "Statistical Significance of Autoimmune Disease Modules") +
+  scale_color_manual(values = c("padj < 0.05" = "#FB5607", "padj > 0.05" = "#8D99AE")) +
+  #scale_y_log10() +
+  ggplot2::scale_y_continuous(limits = c(0, 5)) + 
+  theme_minimal() + 
+  theme(axis.text = element_text(size = 15),
+        legend.position = "bottom") +
+  geom_hline(yintercept = -log10(0.05), color = "red") +
+  coord_flip()
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/AutoDis_LCC_stat_signif2.pdf", height = 10, width = 10)
+plt1
+dev.off()
+
+# Now combine LCC, signif, and num_genes
+autoimmune_LCC_df %<>%
+  arrange(num_genes)
+autoimmune_LCC_df$Disease = factor(row.names(autoimmune_LCC_df), 
+                                   levels = row.names(autoimmune_LCC_df))
+
+plt2 <- ggplot(autoimmune_LCC_df) +
+  aes(x = Disease, y = num_genes, colour = signif, size = LCCsize) +
+  geom_point(shape = "circle", alpha = 0.5) +
+  scale_size(range = c(0, 10)) +
+  labs(x = "Disease", y = "Number of disease genes", title = "Statistical Significance of Autoimmune Disease Modules and Number of Disease Genes") +
+  scale_color_manual(values = c("padj < 0.05" = "#FB5607", "padj > 0.05" = "#8D99AE")) +
+  theme_minimal() + 
+  theme(text = element_text(size = 17),
+        #axis.text = element_text(size = 15),
+        legend.position = "bottom") +
+  coord_flip()
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/AutoDis_LCC_signif_numGenes2.pdf", height = 10, width = 16)
+plt2
+dev.off()
+
+```
+
+
+```{r}
+# make visualization using rLCC
+# and maybe even make this its own viz
+autoimmune_LCC_df %<>%
+  arrange(rLCC)
+autoimmune_LCC_df$Disease = factor(row.names(autoimmune_LCC_df), 
+                                   levels = row.names(autoimmune_LCC_df))
+
+plt3 <- ggplot(autoimmune_LCC_df %>% dplyr::arrange(desc(padj))) +
+  aes(x = Disease, y = rLCC, colour = signif, size = rLCC) +
+  geom_point(shape = "circle", fill = "#112446", alpha = 0.5) +
+  scale_color_manual(values = c("padj < 0.05" = "#FB5607", "padj > 0.05" = "#8D99AE")) +
+  scale_size(range = c(1, 15)) +
+  labs(x = "", y = "rLCC", title = "rLCC of Autoimmune Diseases") +
+  theme_minimal() +
+  theme(legend.position = "bottom", 
+        text = element_text(size = 18),
+        axis.text = element_text(size = 18)) +
+  coord_flip()
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/AutoDis_signif_LCC_and_rLCC2.pdf", height = 20, width = 16)
+patchwork <- (plt2/plt3)
+patchwork + plot_annotation(tag_levels = 'A')
+dev.off()
+
+```
+
+```{r}
+plt3 <- ggplot(autoimmune_LCC_df %>% dplyr::arrange(desc(padj))) +
+  aes(x = Disease, y = rLCC, colour = signif, size = rLCC) +
+  geom_point(shape = "circle", fill = "#112446", alpha = 0.5) +
+  scale_color_manual(values = c("padj < 0.05" = "#FB5607", "padj > 0.05" = "#8D99AE")) +
+  scale_size(range = c(1, 15)) +
+  labs(x = "", y = "rLCC", title = "rLCC of Autoimmune Diseases") +
+  theme_minimal() +
+  theme(legend.position = "bottom", 
+        text = element_text(size = 18),
+        axis.text = element_text(size = 20)) +
+  coord_flip()
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/AutoDis_signif_rLCC2.pdf", height = 18, width = 17)
+plt3
+dev.off()
+```
+
+
+
+```{r}
+# Get diseases with significant modules
+autoimmune_LCC_df <- autoimmune_LCC_df %>% 
+  mutate(padj = p.adjust(p_val, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05"))
+
+signif_diseases <- autoimmune_LCC_df %>%
+  filter(signif == "padj < 0.05")
+
+length(unique(signif_diseases$Disease))
+```
+
+
+Jaccard Similarity
+
+```{r}
+jacc_dis <- jacc_sep_full %>%
+  filter(p_Jacc < 0.05) %>%
+  select(dis1, dis2, Jacc)
+jacc_dis_g <- graph.data.frame(jacc_dis)
+jacc_dis_mat <- as.matrix(get.adjacency(jacc_dis_g, attr='Jacc'))
+jacc_dis_mat_full <- jacc_dis_mat + t(jacc_dis_mat) + diag(dim(jacc_dis_mat)[1])
+
+superheat(jacc_dis_mat_full, pretty.order.rows = T, pretty.order.cols=T, scale=F, 
+          heat.pal = c("white", "red"), heat.pal.values = c(0, 0.07, 1), 
+          bottom.label.text.angle = 90, bottom.label.text.size = 2, left.label.text.size = 2)
+
+# Jacc as a graph
+g_jacc = graph_from_adjacency_matrix(jacc_dis_mat_full, mode = "undirected", weighted = TRUE)
+
+E(g_jacc)$width = E(g_jacc)$weight
+V(g_jacc)$size = strength(g_jacc)
+V(g_jacc)$label.color = "#264660"
+E(g_jacc)$color = "grey66"
+
+Isolated = which(degree(g_jacc) == 0)
+g_jacc = delete.vertices(g_jacc, Isolated)
+```
+
+```{r}
+# Remove edges that are not signif
+
+signif_link <- jacc_sep_full %>% filter(p_Jacc < 0.05) %>% select(dis1, dis2)
+hyper_g <- graph_from_edgelist(as.matrix(signif_link), directed = F)
+
+# get edges
+gsize(hyper_g)
+keep_edges = E(hyper_g)
+
+# keep edges from jacc_dis_g that are in hyper_g
+g_jacc_signif <- subgraph.edges(g_jacc, eids = which(E(g_jacc) %in% E(hyper_g)), delete.vertices = TRUE)
+gsize(g_jacc_signif)
+
+V(g_jacc_signif)$size = strength(g_jacc_signif) * 20
+V(g_jacc_signif)$text <- V(g_jacc_signif)$name #V(g_jacc_signif)$text <- ifelse(V(g_jacc_signif)$size > 1, V(g_jacc_signif)$name, "")
+V(g_jacc_signif)$label.color = "#264660"
+E(g_jacc_signif)$width = E(g_jacc_signif)$weight
+E(g_jacc_signif)$width = E(g_jacc_signif)$weight
+E(g_jacc_signif)$color = "grey66"
+g_jacc_signif <- simplify(g_jacc_signif)
+
+temp_df <- igraph::as_data_frame(g_jacc_signif, 'both')
+
+require(ggraph)
+g_jacc_filt <- g_jacc_signif %>%
+  delete.edges(., which(E(g_jacc_signif)$weight <= 0.05)) %>%
+  delete.vertices(., degree(.) <= 2 ) %>%
+  ggraph(., 'stress') +
+  geom_edge_hive(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = size), color = "#FB5607") +
+  geom_node_text(aes(label = text, size = size), color = "red4", nudge_y = 0.05) +
+  scale_edge_width(range = c(0.5, 2)) +
+  labs(title = "Jaccard Similarity between Diseases") +
+  scale_size(range = c(4, 10)) +
+  theme_void() +
+  theme(text = element_text(size = 25),
+        legend.position = "bottom", 
+        legend.text = element_text(size=30), 
+        legend.title = element_text(size = 32))
+
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Disease_Jacc2.pdf", width = 14, height = 10)
+g_jacc_filt
+dev.off()
+
+```
+
+
+
+
+
+
+
+
+Separation
+
+```{r}
+## Plot Sab graph with stat signif edges
+
+g_sep <- jacc_sep_full %>%
+  filter(dis1 %in% signif_diseases$Disease) %>%
+  filter(dis2 %in% signif_diseases$Disease) %>%
+  filter(Sab < 0) %>%
+  filter(p_Sab < 0.05) %>%
+  select(dis1, dis2, Sab) %>%
+  graph.data.frame(., directed = F)
+sep_matrix <- get.adjacency(g_sep, sparse = FALSE, attr='Sab')
+g_sep = graph_from_adjacency_matrix(abs(sep_matrix), mode = "undirected", weighted = T)
+
+V(g_sep)$degree = degree(g_sep)
+
+# plot
+ggraph(g_sep, "stress") + # "stress"
+  geom_edge_arc(aes(width = weight,
+                    alpha = weight), strength = 0.1) +
+  geom_node_point(aes(size = degree), color = "turquoise3", alpha = 0.7) +
+  geom_node_text(aes(label = name),
+                 size = 3) +
+  theme_void()
+
+```
+
+```{r}
+# look at Sab with disease categories
+
+x = GDA_data %>% select(NewName, DescriptorName)
+
+tmp = GDA_data$DescriptorName %>% 
+  stringr::str_split("\\|", simplify = TRUE) %>%
+  as.data.frame()
+x = cbind(x, tmp) %>%
+  pivot_longer(-NewName) %>% 
+  filter(value != "") %>%
+  filter(name != "DescriptorName") %>% 
+  select(-name) %>%
+  unique()
+
+# gets disease category 
+categ_dis = x %>% 
+  group_by(value) %>%
+  mutate(n = n()) %>%
+  ungroup() %>% 
+  group_by(NewName) %>% 
+  mutate(x = max(n)) %>%
+  filter(n == x) %>%
+  select(-c(n,x)) %>%
+  filter(NewName %in% GDA_auto$NewName)
+categ_dis = categ_dis[match(V(g_sep)$name, categ_dis$NewName),]
+
+V(g_sep)$value <- categ_dis$value
+
+dis_sep_viz <- ggraph(g_sep, "stress") +
+  geom_edge_hive(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = degree, color = value)) +
+  geom_node_text(aes(label = name, size = degree), nudge_y = 0.08) +
+  scale_edge_width(range = c(0.1, 1)) +
+  scale_color_hue(l  = c(75), c = 35) + 
+  scale_edge_width(range = c(0.5, 3))+
+  labs(title = "Separation between Disease Modules") +
+  scale_size(range = c(7, 15)) + 
+  theme_void() +
+  theme(legend.text = element_text(size=18), legend.title = element_text(size = 20))
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Disease_Sep2.pdf", width = 30, height = 18)
+dis_sep_viz
+dev.off()
+
+```
+
+
+
+
+# Combine Sep and Jacc
+
+```{r}
+# make graph of signif Sab and and signif Jacc
+g_jacc_sep <- jacc_sep_full %>%
+  filter(dis1 %in% signif_diseases$Disease) %>%
+  filter(dis2 %in% signif_diseases$Disease) %>%
+  filter(Sab < 0) %>%
+  filter(p_Sab < 0.05) %>%
+  filter(p_Jacc < 0.05) %>%
+  filter(Jacc < 0.05) %>%
+  select(dis1, dis2) %>%
+  graph.data.frame(., directed = F)
+graph_matrix <- get.adjacency(g_jacc_sep, sparse = FALSE)
+g_jacc_sep = graph_from_adjacency_matrix(abs(sep_matrix), mode = "undirected", weighted = T)
+  
+
+# gets disease category 
+categ_dis = x %>% 
+  group_by(value) %>%
+  mutate(n = n()) %>%
+  ungroup() %>% 
+  group_by(NewName) %>% 
+  mutate(x = max(n)) %>%
+  filter(n == x) %>%
+  select(-c(n,x)) %>%
+  filter(NewName %in% GDA_auto$NewName)
+categ_dis = categ_dis[match(V(g_jacc_sep)$name, categ_dis$NewName),]
+
+V(g_jacc_sep)$value <- categ_dis$value
+V(g_jacc_sep)$degree <- degree(g_jacc_sep)
+V(g_jacc_sep)$size = strength(g_jacc_sep) * 1.5
+V(g_jacc_sep)$text <- V(g_jacc_sep)$name #V(g_jacc_signif)$text <- ifelse(V(g_jacc_signif)$size > 1, V(g_jacc_signif)$name, "")
+E(g_jacc_sep)$Sab = E(g_jacc_sep)$weight
+E(g_jacc_sep)$color = "grey66"
+
+# g_dis_sep <- ggraph(g_jacc_sep , "stress") +
+#   geom_edge_hive(aes(width = Sab, alpha = Sab)) +
+#   geom_node_point(aes(size = degree, color = value)) +
+#   geom_node_text(aes(label = name, size = degree)) +
+#   scale_edge_width(range = c(0.1, 1)) +
+#   scale_color_hue(l  = c(75), c = 35) + 
+#   scale_edge_width(range = c(0.5, 3))+
+#   scale_size(range = c(8, 15)) + 
+#   labs(title = "Separation between Disease Modules") +
+#   theme_void() +
+#   theme(text = element_text(size=30),
+#     legend.text = element_text(size=40), 
+#     legend.title = element_text(size = 42))
+# 
+# CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Autoimmune_Jacc_Sab_graph2.pdf", height = 44, width = 51)
+# patchwork <- (g_jacc_filt / g_dis_sep)
+# patchwork + plot_annotation(tag_levels = 'A')
+# dev.off()
+
+```
+
+
+```{r}
+# Sep Highlighting Rare Comorbidities
+
+#g_sep_rare = g_jacc_sep %>%
+#  igraph::as_data_frame(what = "edges")
+#g_sep_rare$Comorbidity <- "known"
+#g_sep_rare$Comorbidity[c(5,7,8,11)] <- "rare"
+
+#g_sep_rare <- graph_from_data_frame(g_sep_rare, directed = F)
+#V(g_sep_rare)$value <- categ_dis$value
+#V(g_sep_rare)$`Disease Type` <- V(g_sep_rare)$value
+#V(g_sep_rare)$Degree <- degree(g_sep_rare)
+
+graph_rare <- ggraph(g_sep_rare, "stress") +
+  geom_edge_hive(aes(width = Sab, alpha = Sab, color=Comorbidity)) +
+  guides(color = guide_legend(override.aes = list(width = 20))) +
+  geom_node_point(aes(size = Degree, color = `Disease Type`)) +
+  geom_node_text(aes(label = name, size = Degree)) +
+  #scale_edge_width(range = c(0.1, 1)) +
+  scale_color_hue(l  = c(75), c = 35) + 
+  scale_edge_width(range = c(7, 10))+
+  scale_size(range = c(40, 70)) + 
+  scale_edge_colour_manual(values = c('black', 'red')) +
+  labs(title = "Separation between Disease Modules") +
+  theme_void() +
+  theme(title = element_text(size = 150),
+    legend.text = element_text(size=105), 
+    legend.title = element_text(size = 115),
+    legend.position = "bottom") +
+  guides(color = guide_legend(override.aes = list(size = 40), nrow=3, byrow=TRUE))
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/test_Autoimmune_Sab_Rare2.pdf", height = 70, width = 116) # height = 30, width = 51
+graph_rare
+dev.off()
+
+```
+
+
+
+# Base R: Separation Plot
+```{r}
+set.seed(123)
+
+# settings for nodes
+V(g_jacc_sep)$node_color <- ifelse(V(g_jacc_sep)$value == "Musculoskeletal Diseases", "pink",
+                                   ifelse(V(g_jacc_sep)$value == "Nervous System Diseases", "lightblue", 
+                                          ifelse(V(g_jacc_sep)$value == "Digestive System Diseases", "violet", 
+                                                 ifelse(V(g_jacc_sep)$value == "Skin and Connective Tissue Diseases", "lightgreen", ifelse(V(g_jacc_sep)$value == "Congenital, Hereditary, and Neonatal Diseases and Abnormalities", "orange", "yellow")))))
+
+# settings for edges
+#E(g_sep_rare)$edge_color <- ifelse(E(g_sep_rare)$Comorbidity == "known","grey40","red" )
+
+
+coord <- g_jacc_sep %>%
+  layout_with_fr(., weights = abs(E(.)$weight) *0.5) %>%
+  igraph::norm_coords()
+
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Autoimmune_Disease_Sab2.pdf", height = 10, width = 14)
+plot(x = g_jacc_sep,
+     vertex.color = V(g_jacc_sep)$node_color,
+     vertex.frame.color = NA,
+     vertex.label.cex = V(g_jacc_sep)$Degree*0.5 - 0.5,
+     vertex.label.color = "black",
+     vertex.label.degree = -pi/2, # how to move labels?
+     vertex.label.dist = 1,
+     vertex.label.family = "Helvetica",
+     vertex.label.size = 35,
+     vertex.label.y = 5,
+     vertex.size = 10,
+     
+     edge.color = E(g_jacc_sep)$edge_color,
+     edge.width = (E(g_jacc_sep)$weight *15)+1,
+     edge.curved = 0.3,
+     
+     layout = coord
+     )
+
+
+legend(1, -1, legend = c("Disease Type",
+"Musculoskeletal Diseases","Nervous System Diseases","Digestive System Diseases","Skin and Connective Tissue Diseases", "Congenital, Hereditary, and Neonatal Diseases and Abnormalities", "Pathological Conditions, Signs and Symptoms"), 
+  bty = "n",
+  ncol = 1,
+  lwd = 10,
+  horiz = F,
+  lty = c(NA, NA, NA, NA,NA, NA, NA, NA),
+  pch = c(NA, 20, 20, 20, 20, 20, 20, 20),
+  col=c(NA, "pink", "lightblue", "violet", "lightgreen", "orange", "yellow"),
+  cex = 0.8 # font size
+)
+
+dev.off()
+```
+
+
+
+

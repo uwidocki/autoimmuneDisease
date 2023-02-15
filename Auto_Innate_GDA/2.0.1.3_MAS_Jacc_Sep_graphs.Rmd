@@ -1,0 +1,348 @@
+---
+title: "2.0.1.3_MAS_Jacc_Sep_graphs"
+author: "Ursula Widocki"
+date: "2022-11-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+library(igraph)
+library(magrittr)
+library(NetSci)
+library(patchwork)
+library(Cairo)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+```
+
+```{r}
+# Read in PPI data
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+# GDA
+GDA_data = fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new2.tsv') # has isAutoimmune col
+GDA_auto <- GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+
+# LCCs
+autoimmune_LCC_df = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs_new2.tsv")
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+autoimmune_LCC_df$rLCC <- autoimmune_LCC_df$rLCC * 100
+signif_dis <- autoimmune_LCC_df %>%
+  filter(padj < 0.05) %>%
+  pull(Disease) %>%
+  unique()
+
+# Jacc and Separation calcs
+jacc_sep_full <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Autoimmune_jacc_sep2.tsv")
+jacc_sep_full %<>% filter(dis1 %in% signif_dis) %>%
+  filter(dis2 %in% signif_dis)
+
+```
+
+# make the disease network
+```{r}
+type_i <- c("myasthenia gravis", "polymyositis", "hashimoto disease")
+type_ii <- c("arthritis rheumatoid", "scleroderma", "hashimoto disease", "hepatitis autoimmune", "lupus erythematosus systemic", "anemia hemolytic", 
+                   "alopecia areata")
+type_iii <- c("hashimoto disease","myasthenia gravis","sjogrens syndrome", "diabetes mellitus type 1","anemia hemolytic", "lupus erythematosus systemic", "arthritis rheumatoid", "multiple sclerosis", "hepatitis autoimmune", "colitis ulcerative", "scleroderma")
+
+jacc_diseases <- jacc_sep_full %>%
+  mutate(Jacc = ifelse(p_Jacc < 0.05, Jacc, 0)) %>%
+  filter(Jacc > 0)
+jacc_diseases <- c(unique(c(jacc_diseases$dis1, jacc_diseases$dis2)))
+
+sep_diseases <- jacc_sep_full %>%
+  mutate(Jacc = ifelse(p_Jacc < 0.05, Jacc, 0)) %>%
+  filter(Jacc > 0) %>%
+  mutate(Sab = ifelse(p_Sab < 0.05, Sab, 0)) %>%
+  filter(p_Sab < 0.05)
+sep_diseases <- c(unique(c(sep_diseases$dis1, sep_diseases$dis2)))
+
+disease_g <- jacc_sep_full %>%
+  mutate(Jacc = ifelse(p_Jacc < 0.05, 2 * Jacc, 0)) %>% # Jacc has half the range of Sab values
+  mutate(Sab = ifelse((p_Sab < 0.05) & (dis1 %in% sep_diseases) & (dis2 %in% sep_diseases), Sab, 0)) %>%
+  mutate(mas1 = ifelse((dis1 %in% type_i) & (dis2 %in% type_i) & (Jacc > 0), 1, 0)) %>%
+  mutate(mas2 = ifelse((dis1 %in% type_ii) & (dis2 %in% type_ii) & (Jacc > 0), 1, 0)) %>%
+  mutate(mas3 = ifelse((dis1 %in% type_iii) & (dis2 %in% type_iii) & (Jacc > 0), 1, 0)) %>%
+  mutate(jacc = ifelse((dis1 %in% jacc_diseases) & (dis2 %in% jacc_diseases), 1, 0)) %>%
+  mutate(sep = ifelse((dis1 %in% sep_diseases) & (dis2 %in% sep_diseases), 1, 0)) %>%
+  mutate(jacc_sep = ifelse(Sab != 0 & Jacc != 0, 1, 0)) %>%
+  mutate(Sab = abs(Sab)) %>%
+  select(dis1, dis2, Jacc, Sab, mas1, mas2, mas3, jacc, sep, jacc_sep) %>%
+  mutate(Jacc_w = Jacc) %>%
+  pivot_longer(cols = c("Jacc_w", "Sab"), names_to = "type") %>%
+  rename(weight = value) %>%
+  mutate(edge_color = ifelse(type == "Jacc_w", "#97CC0480","#2292A480")) %>%
+  graph.data.frame(., directed = F)
+
+V(disease_g)$strength <- strength(disease_g, weights = E(disease_g)$Jacc / 2)
+
+disease_g <- add_vertices(disease_g, nv = 3)
+V(disease_g)$name[21] <- type_i[1]
+V(disease_g)$name[22] <- type_i[2]
+V(disease_g)$name[23] <- type_i[3]
+
+# get coordinates for nodes
+set.seed(668)
+coord <- disease_g %>%
+  layout_with_fr(., weights = abs(E(.)$Jacc) * 2 + 0.1) %>%
+  igraph::norm_coords()
+#coord[19,2] <- -0.1 # moves agammaglobulinemia up
+#coord[11,1] <- -0.9797318 # flips uveitis to anemia position
+#coord[11,2] <- -0.39833023
+#coord[12,1] <- -1 # flips anemia to uveitis position
+#coord[12,2] <- 0.06635058
+```
+
+
+# Multiple Autoimmune Syndrome
+#Type I MAS
+```{r}
+# color nodes in MASI
+
+#CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/graphs_MAS_Jacc_Sab.pdf", height = 8, width = 15)
+par(mar = c(1.3,0.5,1,0.5))
+
+layout_mtx <- matrix(c(1,4, 2,5, 3,6), ncol = 3) # define image positions
+layout(layout_mtx)
+
+node_color_dis = "#CB525C"
+node_color_non = "#B0BEBF"
+label_color_dis = "#AD343E"
+label_color_non = "#5B6D6F"
+
+
+# add MAS diseases as empty/not filled in points
+
+V(disease_g)$node_color <- ifelse(V(disease_g)$name %in% type_i, node_color_dis, node_color_non)
+V(disease_g)$label_color <- ifelse(V(disease_g)$name %in% type_i, label_color_dis, label_color_non)
+V(disease_g)$node_size <- ifelse(V(disease_g)$name %in% type_i, (V(disease_g)$strength + 0.5) * 8, 5)
+V(disease_g)$label_size <- ifelse(V(disease_g)$name %in% type_i, 1.5, 0.75)
+
+
+plot(x = disease_g,
+     vertex.color = V(disease_g)$node_color,
+     vertex.frame.color = NA,
+     vertex.label.cex = V(disease_g)$label_size,
+     vertex.label.color = V(disease_g)$label_color,
+     vertex.label.degree = -pi/2, # how to move labels?
+     vertex.label.dist = 1,
+     vertex.label.family = "Helvetica Neue",
+     vertex.label.y = 7,
+     vertex.size = V(disease_g)$node_size,
+     
+     edge.color = E(disease_g)$edge_color,
+     edge.width = E(disease_g)$weight * E(disease_g)$mas1, # this will already by the weight
+     
+     layout = coord,
+     )
+title("A: MAS type I", adj = 0, cex = 3)
+
+# legend for the graphs
+# add empty point if there is a not module and filled if there is
+legend(0.65, -0.5, legend = c("Legend","Jaccard Similarity","Separation","Disease Observed","Disease Not Observed"), 
+  bty = "o",
+  ncol = 1,
+  lwd = 5,
+  horiz = F,
+  lty = c(NA, 1, 1, NA, NA),
+  pch = c(NA, NA, NA, 20, 20),
+  col=c(NA, "#97CC0480", "#2292A480", "#C7434E", "#B0BEBF"),
+  cex = 0.9, # font size,
+  
+ box.col="#5B6D6F"
+)
+
+
+
+#Type II MAS
+
+# color nodes in MASII
+V(disease_g)$node_color <- ifelse(V(disease_g)$name %in% type_ii, node_color_dis, node_color_non)
+V(disease_g)$label_color <- ifelse(V(disease_g)$name %in% type_ii, label_color_dis, label_color_non)
+V(disease_g)$node_size <- ifelse(V(disease_g)$name %in% type_ii, (V(disease_g)$strength+ 0.5) * 8, 5)
+V(disease_g)$label_size <- ifelse(V(disease_g)$name %in% type_ii,  1.5, 0.75)
+
+plot(x = disease_g,
+     vertex.color = V(disease_g)$node_color,
+     vertex.frame.color = NA,
+     vertex.label.cex = V(disease_g)$label_size,
+     vertex.label.color = V(disease_g)$label_color,
+     vertex.label.degree = -pi/2, # how to move labels?
+     vertex.label.dist = 1,
+     vertex.label.family = "Helvetica Neue",
+     vertex.label.y = 7,
+     vertex.size = V(disease_g)$node_size,
+     
+     edge.color = E(disease_g)$edge_color,
+     edge.width = E(disease_g)$weight * E(disease_g)$mas2 * 20,
+     
+     layout = coord
+     )
+title("B: MAS type II", adj = 0, cex = 3)
+
+#Type III MAS
+
+V(disease_g)$node_color <- ifelse(V(disease_g)$name %in% type_iii, node_color_dis, node_color_non)
+V(disease_g)$label_color <- ifelse(V(disease_g)$name %in% type_iii, label_color_dis, label_color_non)
+V(disease_g)$node_size <- ifelse(V(disease_g)$name %in% type_iii, (V(disease_g)$strength+ 0.5) * 8, 5)
+V(disease_g)$label_size <- ifelse(V(disease_g)$name %in% type_iii, 1.5, 0.75)
+
+plot(x = disease_g,
+     vertex.color = V(disease_g)$node_color,
+     vertex.frame.color = NA,
+     vertex.label.cex = V(disease_g)$label_size,
+     vertex.label.color = V(disease_g)$label_color,
+     vertex.label.degree = -pi/2, # how to move labels?
+     vertex.label.dist = 1,
+     vertex.label.family = "Helvetica Neue",
+     vertex.label.y = 7,
+     vertex.size = V(disease_g)$node_size,
+     
+     edge.color = E(disease_g)$edge_color,
+     edge.width = E(disease_g)$weight * E(disease_g)$mas3 * 20,
+     
+     layout = coord
+     )
+title("C: MAS type III", adj = 0, cex = 3)
+
+#dev.off()
+
+#CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/graphs_Jacc_sep.pdf", height = 6, width = 12)
+
+#layout_mtx <- matrix(c(1,2), ncol = 2) # define image positions
+#layout(layout_mtx)
+
+# Jacc
+
+V(disease_g)$node_color <- ifelse(V(disease_g)$name %in% jacc_diseases, node_color_dis, node_color_non)
+V(disease_g)$label_color <- ifelse(V(disease_g)$name %in% jacc_diseases, label_color_dis, label_color_non)
+V(disease_g)$node_size <- ifelse(V(disease_g)$name %in% jacc_diseases, (V(disease_g)$strength+ 0.5) * 8, 5) 
+V(disease_g)$label_size <- ifelse(V(disease_g)$name %in% jacc_diseases, 1.5, 0.75)
+
+plot(x = disease_g,
+     vertex.color = V(disease_g)$node_color,
+     vertex.frame.color = NA,
+     vertex.label.cex = V(disease_g)$label_size,
+     vertex.label.color = V(disease_g)$label_color,
+     vertex.label.degree = -pi/2, # how to move labels?
+     vertex.label.dist = 1,
+     vertex.label.family = "Helvetica Neue",
+     vertex.label.y = 7,
+     vertex.size = V(disease_g)$node_size,
+     
+     edge.color = E(disease_g)$edge_color,
+     edge.width = ifelse(E(disease_g)$type == "Jacc_w", E(disease_g)$weight * E(disease_g)$jacc * 20, 0),
+     edge.curved = 0.3,
+     
+     layout = coord
+     )
+title("D: Jaccard Similarity", adj = 0, cex = 3)
+
+# Sab
+
+V(disease_g)$node_color <- ifelse(V(disease_g)$name %in% sep_diseases, node_color_dis, node_color_non)
+V(disease_g)$label_color <- ifelse(V(disease_g)$name %in% sep_diseases, label_color_dis, label_color_non)
+V(disease_g)$node_size <- ifelse(V(disease_g)$name %in% sep_diseases, (V(disease_g)$strength+ 0.5) * 8, 5) 
+V(disease_g)$label_size <- ifelse(V(disease_g)$name %in% sep_diseases, 1.5, 0.75)
+
+plot(x = disease_g,
+     vertex.color = V(disease_g)$node_color,
+     vertex.frame.color = NA,
+     vertex.label.cex = V(disease_g)$label_size,
+     vertex.label.color = V(disease_g)$label_color,
+     vertex.label.degree = -pi/2, # how to move labels?
+     vertex.label.dist = 1,
+     vertex.label.family = "Helvetica Neue",
+     vertex.label.y = 7,
+     vertex.size = V(disease_g)$node_size,
+     
+     edge.color = E(disease_g)$edge_color,
+     edge.width = ifelse(E(disease_g)$type == "Sab", E(disease_g)$weight * E(disease_g)$sep * 20, 0),
+     
+     layout = coord
+     )
+title("E: Separation", adj = 0, cex = 3)
+
+
+
+# plot only edges with Sab and Jacc
+V(disease_g)$node_color <- ifelse(V(disease_g)$name %in% c(sep_diseases), node_color_dis, node_color_non)
+V(disease_g)$label_color <- ifelse(V(disease_g)$name %in% c(sep_diseases), label_color_dis, label_color_non)
+V(disease_g)$node_size <- ifelse(V(disease_g)$name %in% sep_diseases, (V(disease_g)$strength+ 0.5) * 8, 5) 
+V(disease_g)$label_size <- ifelse(V(disease_g)$name %in% sep_diseases, 1.5, 0.75)
+
+E(disease_g)$weight <- ifelse(E(disease_g)$sep == 1, E(disease_g)$weight, 0)
+
+plot(x = disease_g,
+     vertex.color = V(disease_g)$node_color,
+     vertex.frame.color = NA,
+     vertex.label.cex = V(disease_g)$label_size,
+     vertex.label.color = V(disease_g)$label_color,
+     vertex.label.degree = -pi/2, # how to move labels?
+     vertex.label.dist = 1,
+     vertex.label.family = "Helvetica Neue",
+     vertex.label.y = 7,
+     vertex.size = V(disease_g)$node_size,
+     
+     edge.color = E(disease_g)$edge_color,
+     edge.width = E(disease_g)$weight *E(disease_g)$jacc_sep * 20,
+     layout = coord
+     )
+title("F: Jaccard Similarity and Separation", adj = 0, cex = 3)
+
+#dev.off()
+```
+
+
+
+
+#################################################### old code I'm not using
+require(patchwork)
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/graphs_MAS_Jacc_Sab.pdf", height = 60, width = 130)
+pat <- (plot_m1 + plot_m2 + plot_m3) / (plot_jacc + plot_sep)
+pat + plot_annotation(tag_levels = 'A')
+dev.off()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

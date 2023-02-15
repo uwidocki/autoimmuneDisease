@@ -1,0 +1,81 @@
+---
+title: "4.0_Drug_commonality_between_autoimmune_diseases"
+author: "Ursula Widocki"
+date: "2022-08-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(igraph)
+library(ggraph)
+library(NetSci)
+library(magrittr)
+library(stringr)
+library(ggraph)
+library(Cairo)
+
+library(rdrop2)
+drop_auth()
+
+`%ni%` <- Negate(`%in%`)
+```
+
+```{r}
+drug_targets_data <- drop_read_csv("/Biology/99_Toolbox/data/DrugBank/data/out/DB_Drug_Targets_v5.1.9.csv")
+drug_targets_data %<>%
+  filter(Organism == "Humans" | Organism == "Humans and other mammals") %>%
+  filter(Indication != "") %>%
+  select(Name, Indication, Gene_Target, Known_Action, P_id, P_id_source, Mech_Of_Action)
+  
+```
+
+# in the Indication column, get disease names
+```{r}
+diseases <- c("rheumatoid arthritis", "psoriasis", "diabetes mellitus type 1", "type 1 diabetes", "multiple sclerosis")
+# for each autoimmune disease
+  # if the disease is in Indication
+
+temp <- drug_targets_data[which(diseases %in% drug_targets_data$Indication),]
+```
+
+######## don't forget to go through each drug by hand BECAUSE some will have a disclaimer on the bottom with the disease name
+
+
+# look at how many drugs per diseases
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

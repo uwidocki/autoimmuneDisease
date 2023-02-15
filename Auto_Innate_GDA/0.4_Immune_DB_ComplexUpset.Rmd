@@ -1,0 +1,195 @@
+---
+title: "0.4_Immune_DB_ComplexUpset"
+author: "Ursula Widocki"
+date: "6/3/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ComplexUpset)
+require(dplyr)
+require(tidyr)
+require(ggplot2)
+
+library(ggplot2movies)
+```
+
+```{r}
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", 
+                         sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+```
+
+
+Tutorial
+```{r}
+
+movies = as.data.frame(ggplot2movies::movies)
+
+genres = colnames(movies)[18:24]
+movies[genres] = movies[genres] == 1
+
+movies[movies$mpaa == '', 'mpaa'] = NA
+movies = na.omit(movies)
+```
+
+```{r}
+#set_size(8, 3)
+
+upset(
+    movies,
+    genres,
+    base_annotations=list(
+        'Intersection size'=intersection_size(
+            counts=TRUE,
+            mapping=aes(fill=mpaa)
+        )
+    ),
+    width_ratio=0.1
+)
+```
+
+
+# Complex UpSet plot of databases
+```{r}
+immune_complex_plot <- immune_data %>% dplyr::select(Symbol, GO, KEGG, InnateDB, 
+                                                     isInnateGO, isAdaptiveGO, isOtherGO, 
+                                                     isInnateKEGG, isAdaptiveKEGG, isInnateInnateDB) %>%
+  unique()
+
+immune_complex_plot <- immune_complex_plot[!duplicated(immune_complex_plot), ]
+#rownames(immune_complex_plot) <- immune_complex_plot$Symbol
+databases = c("GO", "KEGG", "InnateDB")
+
+#immune_complex_plot[databases] = immune_complex_plot[databases] == 1
+
+#immune_complex_plot <- immune_complex_plot %>%
+#  select(Symbol, GO, KEGG) 
+
+# transform immune data
+immune_complex_plot$ImmComp <- ifelse((immune_complex_plot$isInnateGO == 1 | immune_complex_plot$isInnateKEGG == 1 | immune_complex_plot$isInnateInnateDB == 1) & (immune_complex_plot$isAdaptiveGO == 0 & immune_complex_plot$isAdaptiveKEGG == 0) & (immune_complex_plot$isOtherGO == 0), "Innate", 
+                                      ifelse((immune_complex_plot$isInnateGO == 0 & immune_complex_plot$isInnateKEGG == 0 & immune_complex_plot$isInnateInnateDB == 0) & (immune_complex_plot$isAdaptiveGO == 1 | immune_complex_plot$isAdaptiveKEGG == 1) & (immune_complex_plot$isOtherGO == 0), "Adaptive",
+                                             ifelse((immune_complex_plot$isInnateGO == 0 & immune_complex_plot$isInnateKEGG == 0 & immune_complex_plot$isInnateInnateDB == 0) & (immune_complex_plot$isAdaptiveGO == 0 & immune_complex_plot$isAdaptiveKEGG == 0) & (immune_complex_plot$isOtherGO == 1), "General",
+                                                    ifelse((immune_complex_plot$isInnateGO == 1 | immune_complex_plot$isInnateKEGG == 1 | immune_complex_plot$isInnateInnateDB == 1) & (immune_complex_plot$isAdaptiveGO == 1 | immune_complex_plot$isAdaptiveKEGG == 1) & (immune_complex_plot$isOtherGO == 0), "Innate&Adaptive", 
+                                                           ifelse((immune_complex_plot$isInnateGO == 1 | immune_complex_plot$isInnateKEGG == 1 | immune_complex_plot$isInnateInnateDB == 1) & (immune_complex_plot$isAdaptiveGO == 0 & immune_complex_plot$isAdaptiveKEGG == 0) & (immune_complex_plot$isOtherGO == 1), "Innate&General",
+                                                                  ifelse((immune_complex_plot$isInnateGO == 0 & immune_complex_plot$isInnateKEGG == 0 & immune_complex_plot$isInnateInnateDB == 0) & (immune_complex_plot$isAdaptiveGO == 1 | immune_complex_plot$isAdaptiveKEGG == 1) & (immune_complex_plot$isOtherGO == 1), "Adaptive&General",
+                                                                         ifelse((immune_complex_plot$isInnateGO == 1 | immune_complex_plot$isInnateKEGG == 1 | immune_complex_plot$isInnateInnateDB == 1) & (immune_complex_plot$isAdaptiveGO == 1 | immune_complex_plot$isAdaptiveKEGG == 1) & (immune_complex_plot$isOtherGO == 1), "All_Components","None")))))))
+
+```
+
+```{r}
+upset(
+    immune_complex_plot,
+    databases,
+    base_annotations=list(
+        'Intersection size'=intersection_size(
+            counts=TRUE,
+            mapping=aes(fill=ImmComp),
+            bar_number_threshold = 1
+        )+ scale_fill_manual(values=c(
+            'Innate'='#00AFB5', 
+            'Adaptive'='#FF0054',
+            'Innate&Adaptive'='#9D4EDD', 
+            'General'='#39CB5D',
+            'Innate&General'='#0B4FE1',
+            'Adaptive&General'='#FB5607',
+            'All_Components'= 'grey44'
+        ))
+    ),
+    width_ratio=0.1,
+    wrap = T
+) + ggtitle('Immune Databases and Immune Components')
+```
+
+
+# to add bars for databases
+width_ratio=0.3,
+    set_sizes=(
+        upset_set_size(
+            geom=geom_bar(
+                aes(fill=ImmComp, x=group),
+                width=0.8
+            ) + scale_fill_manual(values=c(
+            'Innate'='#00AFB5', 
+            'Adaptive'='#FF0054',
+            'Innate&Adaptive'='#9D4EDD', 
+            'General'='#39CB5D',
+            'Innate&General'='#0B4FE1',
+            'Adaptive&General'='#FB5607',
+            'All_Components'= 'black'
+        )),
+            position='left'
+        )
+    ),
+    # moves legends over the set sizes
+    guides='over'
+
+
+
+
+
+
+
+upset(
+    immune_complex_plot,
+    databases,
+    base_annotations=list(
+        'Intersection size'=intersection_size(
+            counts=FALSE,
+            mapping=aes(fill=ImmComp)
+        ) + scale_fill_manual(values=c(
+            'Innate'='#00AFB5', 
+            'Adaptive'='#FF0054',
+            'Innate&Adaptive'='#9D4EDD', 
+            'General'='#39CB5D',
+            'Innate&General'='#0B4FE1',
+            'Adaptive&General'='#FB5607',
+            'All_Components'= 'black'
+        ))
+    ),
+    width_ratio=0.1,
+    set_sizes=(
+        upset_set_size(
+            geom=geom_bar(
+                aes(fill=ImmComp, x=group),
+                width=0.8
+            ),
+            position='right'
+        )
+    )
+    # moves legends over the set sizes
+    guides='over'
+)
+
+For Immune DB data
+```{r}
+debug <- immune_complex_plot %>%
+  filter(GO == 0 & KEGG == 0 & InnateDB == 0)
+```
+
+```{r}
+debug2 <- immune_complex_plot %>%
+  filter(ImmComp == "None")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

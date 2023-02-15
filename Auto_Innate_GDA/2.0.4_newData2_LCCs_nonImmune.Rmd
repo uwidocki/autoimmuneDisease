@@ -1,0 +1,275 @@
+---
+title: "2.0.4_newData_LCCs_nonImmune"
+author: "Ursula Widocki"
+date: "4/22/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+library(igraph)
+library(patchwork)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+```
+
+```{r}
+# Read in immunity genes (just in case you want to incorporate them)
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", 
+                        sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+
+# Read in PPI data
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+# GDA
+GDA_data = fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new2.tsv') # has isAutoimmune col
+GDA_auto <- GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+
+# Autoimmune LCC data
+autoimmune_LCC_df = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs_new2.tsv")
+
+autoimmune_LCC_df <- autoimmune_LCC_df %>% 
+  mutate(padj = p.adjust(p_val, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05"))
+
+signif_dis <- autoimmune_LCC_df %>%
+  filter(padj < 0.05) %>%
+  pull(Disease)
+```
+
+# Do non-immune genes form LCCs
+
+```{r}
+# Calculate if non-immune genes of diseases make an LCC
+
+col_labels <- c("Disease", "LCCsize", "p_val", "Mean", "SD", "Z", "num_genes")
+non_immune_LCC_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(non_immune_LCC_df) <- col_labels
+
+for(dis in signif_dis){
+  dis_genes <- GDA_auto %>% filter(NewName == dis) # get dis genes
+  dis_genes <- unique(dis_genes$HGNC_Symbol)
+  
+  not_immune <- dis_genes[dis_genes %ni% immune_data$Symbol]
+  not_immune <- not_immune[not_immune %in% V(ppi_g)$name]
+  non_immune_LCC <- LCC_signif(G = ppi_g, targets = not_immune, num_bins_degree_G = 1, min_bin_degree = 20, iter = 1000)
+  
+  # add info to df
+  new_line <- c(dis, non_immune_LCC$size, non_immune_LCC$p_val, non_immune_LCC$emp_mean, 
+                non_immune_LCC$emp_SD, non_immune_LCC$Z, length(dis_genes))
+  non_immune_LCC_df[nrow(non_immune_LCC_df) + 1,] <- new_line
+  
+}
+
+```
+
+```{r}
+non_immune_LCC_df$LCCsize <- as.numeric(non_immune_LCC_df$LCCsize)
+non_immune_LCC_df$p_val <- as.numeric(non_immune_LCC_df$p_val)
+non_immune_LCC_df$Mean <- as.numeric(non_immune_LCC_df$Mean)
+non_immune_LCC_df$SD <- as.numeric(non_immune_LCC_df$SD)
+non_immune_LCC_df$Z <- as.numeric(non_immune_LCC_df$Z)
+non_immune_LCC_df$num_genes <- as.numeric(non_immune_LCC_df$num_genes)
+
+non_immune_LCC_df <- non_immune_LCC_df %>% 
+  mutate(padj = p.adjust(p_val, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05"))
+
+rownames(non_immune_LCC_df) <- non_immune_LCC_df$Disease
+
+non_immune_LCC_df %<>% arrange(desc(padj))
+non_immune_LCC_df$Disease = factor(row.names(non_immune_LCC_df), 
+                                   levels = row.names(non_immune_LCC_df))
+
+ggplot(non_immune_LCC_df %>% dplyr::arrange(p_val)) +
+  aes(x = Disease, y = -log10(p_val), colour = signif, size = LCCsize) +
+  geom_point(shape = "circle", fill = "#112446", alpha = 0.4) +
+  labs(x = "Disease", y = "-log10 p-value", title = "Autoimmune Diseases and Modules formed by Non-Immune System genes") +
+  scale_color_manual(values = c("padj < 0.05" = "#808000", "padj > 0.05" = "#8D99AE")) +
+  scale_y_log10() +
+  #ylim(0, 7.5) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  geom_hline(yintercept = -log10(0.05), color = "red")
+
+plt <- ggplot(non_immune_LCC_df %>% dplyr::arrange(desc(padj))) +
+  aes(x = Disease, y = -log10(padj), colour = signif, size = LCCsize) +
+  geom_point(shape = "circle", fill = "tomato1", alpha = 0.4,) +
+  labs(x = "Disease", y = "-log10 adj p-value", title = "Autoimmune Diseases and Modules formed by Non-Immune System genes") +
+  scale_color_hue(direction = 1) +
+  scale_y_log10() +
+  #ylim(0, 7.5) +
+  scale_color_manual(values = c("padj < 0.05" = "#39CB5D", "padj > 0.05" = "#8D99AE")) +
+  theme_minimal() +
+  #theme() +
+  geom_hline(yintercept = -log10(0.05), color = "red") + 
+  coord_flip()
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/AutoDis_LCC_nonImmune.pdf", height = 6, width = 10)
+plt
+dev.off()
+
+```
+
+```{r}
+# Save the LCC output
+write.table(non_immune_LCC_df, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_nonImmune_LCCs2.tsv", sep = "\t", row.names = T, col.names = T)
+
+#final_LCCs <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_nonImmune_LCCs.tsv")
+```
+
+
+
+
+
+
+# Do immune genes form LCCs
+
+```{r}
+col_labels <- c("Disease", "LCCsize", "p_val", "Mean", "SD", "Z", "num_genes")
+immune_LCC_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(immune_LCC_df) <- col_labels
+
+for(dis in signif_dis){
+  dis_genes <- GDA_auto %>% filter(NewName == dis) # get dis genes
+  dis_genes <- unique(dis_genes$HGNC_Symbol)
+  
+  immune <- dis_genes[dis_genes %in% immune_data$Symbol]
+  immune <- immune[immune %in% V(ppi_g)$name]
+  
+  if(length(immune) <= 1){
+    new_line <- c(dis, length(immune), 1, 1, 0, 0, length(dis_genes))
+  }else{
+    immune_LCC <- LCC_signif(G = ppi_g, targets = immune, num_bins_degree_G = 1, min_bin_degree = 20, iter = 1000)
+    new_line <- c(dis, immune_LCC$size, immune_LCC$p_val, immune_LCC$emp_mean, 
+                immune_LCC$emp_SD, immune_LCC$Z, length(dis_genes))
+  }
+  
+  # add info to df
+  immune_LCC_df[nrow(immune_LCC_df) + 1,] <- new_line
+  
+}
+
+```
+
+```{r}
+immune_LCC_df$LCCsize <- as.numeric(immune_LCC_df$LCCsize)
+immune_LCC_df$p_val <- as.numeric(immune_LCC_df$p_val)
+immune_LCC_df$Mean <- as.numeric(immune_LCC_df$Mean)
+immune_LCC_df$SD <- as.numeric(immune_LCC_df$SD)
+immune_LCC_df$Z <- as.numeric(immune_LCC_df$Z)
+immune_LCC_df$num_genes <- as.numeric(immune_LCC_df$num_genes)
+
+immune_LCC_df <- immune_LCC_df %>% 
+  mutate(padj = p.adjust(p_val, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05"))
+
+rownames(immune_LCC_df) <- immune_LCC_df$Disease
+
+write.table(immune_LCC_df, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_Immune_LCCs2.tsv", sep = "\t", row.names = T, col.names = T)
+
+immune_LCC_df %<>% arrange(desc(padj))
+immune_LCC_df$Disease = factor(row.names(immune_LCC_df), 
+                                   levels = row.names(immune_LCC_df))
+
+ggplot(immune_LCC_df %>% dplyr::arrange(p_val)) +
+  aes(x = Disease, y = -log10(p_val), colour = signif, size = LCCsize) +
+  geom_point(shape = "circle", fill = "#112446", alpha = 0.4) +
+  labs(x = "Disease", y = "-log10 p-value", title = "Autoimmune Diseases and Modules formed by Immune System genes") +
+  scale_color_hue(direction = 1) +
+  scale_color_manual(values = c("padj < 0.05" = "turquoise3", "padj > 0.05" = "tomato1")) +
+  scale_y_log10() +
+  #ylim(0, 7.5) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  geom_hline(yintercept = -log10(0.05), color = "red")
+
+plt <- ggplot(immune_LCC_df %>% dplyr::arrange(desc(padj))) +
+  aes(x = Disease, y = -log10(padj), colour = signif, size = LCCsize) +
+  geom_point(shape = "circle", fill = "tomato1", alpha = 0.4,) +
+  labs(x = "Disease", y = "-log10 adj p-value", title = "Autoimmune Diseases and Modules formed by Immune System genes") +
+  scale_color_hue(direction = 1) +
+  scale_y_log10() +
+  #ylim(0, 7.5) +
+  scale_color_manual(values = c("padj < 0.05" = "turquoise3", "padj > 0.05" = "tomato1")) +
+  theme_minimal() +
+  #theme() +
+  geom_hline(yintercept = -log10(0.05), color = "red") + 
+  coord_flip()
+
+CairoPDF("~/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/AutoDis_LCC_Immune.pdf", height = 6, width = 10)
+plt
+dev.off()
+
+```
+
+```{r}
+temp_full_LCC_df <- autoimmune_LCC_df[,c("Disease", "LCCsize", "p_val", "padj")]
+colnames(temp_full_LCC_df) <- c("Disease", "LCCsize_full", "p_val_full", "padj_full")
+full_and_immune_LCCs <- full_join(temp_full_LCC_df, immune_LCC_df) 
+
+see_this <- full_and_immune_LCCs %>%
+  filter(padj_full < 0.05) %>% # signif full module
+  filter(padj < 0.05) #%>% # signif immune module
+  #filter(LCCsize_full > LCCsize) # not all genes in module are immune
+
+see_this <- see_this[,c("Disease", "LCCsize_full", "LCCsize", "num_genes")]
+colnames(see_this) <- c("Disease", "full_LCCsize", "immune_LCCsize", "num_genes")
+
+see_this_longer_df <- pivot_longer(see_this, cols = c(full_LCCsize, immune_LCCsize), 
+                                 names_to = "whichLCC", values_to = "LCCsize")
+see_this_longer_df <- left_join(see_this_longer_df, see_this[,c("Disease", "full_LCCsize")], by = "Disease")
+
+
+plt <- ggplot(see_this_longer_df) + 
+  aes(x = reorder(Disease, full_LCCsize), y = LCCsize, fill = whichLCC) + 
+  geom_bar(stat = "identity", position = "identity", alpha = 0.7) +
+  labs(x = "Disease", y = "Number of Genes in Module", 
+       title = "Comparing Immunity and Full Modules of Autoimmune Diseases") +
+  scale_fill_manual(values = c("full_LCCsize" = "#8D99AE", "immune_LCCsize" = "#0B4FE1")) +
+  coord_flip() +
+  theme_minimal() +
+  theme(axis.text = element_text(size = 18),
+        title = element_text(size = 18),
+        legend.text = element_text(size = 15),
+        legend.position = "bottom")
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Immune_vs_Full_LCC.pdf", height = 10, width = 14)
+plt
+dev.off()
+
+  
+```
+
+
+
+
+
+
+

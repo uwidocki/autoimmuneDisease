@@ -1,0 +1,2276 @@
+---
+title: "0.2_Immune_DB_Examination"
+author: "Ursula Widocki"
+date: "6/23/2021"
+output: html_document
+---
+##########################################################################################################################
+# This file calculates basic statistics of each database, how they intersect, if they form modules,
+# and calculates the jaccard similarity scores and S_ab between them
+#
+##########################################################################################################################
+
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+library(Cairo)
+require(data.table)
+require(dplyr)
+library(eulerr)
+require(ggplot2)
+library(ggnewscale)
+require(igraph)
+require(magrittr)
+library(NetSci)
+library(patchwork)
+library(plotly)
+require(scales)
+library(superheat)
+require(tibble)
+require(tidyr)
+library(UpSetR)
+library(wTO)
+
+`%ni%` <- Negate(`%in%`)
+
+source("/Users/ursulawidocki/Desktop/BarabasiLab//NetMedTools.R")
+
+```
+
+```{r}
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", 
+                         sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+
+# Read in PPI
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+# Jacc sim function
+```{r}
+jaccard_sim = function(dta){
+  g =  dta %>% graph_from_data_frame(., directed = F)
+  
+  V(g)$type <- bipartite_mapping(g)$type
+  # get the incidence matrix (or adjacency, depending on how the data was structured)
+  A = as_incidence_matrix(g) %>% as.matrix()
+  gg =   (A)  %*% Rfast::transpose(A)
+  
+  names(gg) = colnames(gg) = rownames(A)
+  NORM = matrix(NA, ncol = ncol(gg), nrow = nrow(gg))
+  # Normalize the values
+  ADJ_for_DIS2DIS = gg
+  pb <- txtProgressBar(min = 0, max = (ncol(NORM)), style = 3)
+  for( i in 1:ncol(NORM)){
+    setTxtProgressBar(pb, i)
+    for(j in i:(nrow(NORM))){
+      NORM[i,j] = NORM[j,i] = ADJ_for_DIS2DIS[i,j]/(ADJ_for_DIS2DIS[i,i]+ADJ_for_DIS2DIS[j,j]-ADJ_for_DIS2DIS[i,j])
+    }
+  }
+  close(pb)
+  
+  Genes = diag(gg) %>% as.data.frame()
+  Genes$ID = row.names(Genes)
+  Genes$prop = (Genes$./ sum(Genes$.) )%>% CoDiNA::normalize()
+  Genes$Count = Genes$.
+  Genes = Genes[,-1]
+  # Transform into a edge list
+  rownames(NORM) = colnames(gg)
+  colnames(NORM) = colnames(gg)
+  G = NORM %>% wTO::wTO.in.line() 
+  names(G)[3]="weight"
+  
+  return(G)
+}
+
+```
+
+# logbinning function
+```{r}
+# logbin_distribution function
+
+logbin_distribution = function(samples, B){
+  
+  # Remove zeros
+  samples = samples[samples != 0] # samples from the distribution
+  n = length(samples)
+
+  # Bin samples
+  b1 = min(samples)
+  bBp1 = max(samples)
+  b = replicate(B+1, 0) # vector of zeros of length B+1
+
+  for (i in 1:(B+1)){
+     b[i] = b1 * ((bBp1 / b1)^((i-1)/B))
+  }
+   
+  # Get number of points
+  nums = replicate(B, 0) # vector of zeros of length B
+  for(s in samples){
+    for(i in 1:B){
+      if((b[i] <= s) & (s < b[i+1])){
+        nums[i] = nums[i] + 1
+      }
+    }
+    if(s == bBp1){
+      nums[B] = nums[B] + 1
+    }
+  }
+    
+  # Get the probability densities
+  p = replicate(B, 0) # vector of zeros of length B
+  for(i in 1:B){
+    p[i] = nums[i] / (n * (b[i+1] - b[i]))
+  }
+  
+  # Get x-value locations
+  x = c()
+  for(i in 1:B){
+    x[i] = sqrt(b[i] * b[i+1])
+  }
+  
+  result = as.data.frame(x) %>% cbind(., data.frame(p))
+  return(result)
+}
+
+```
+
+
+
+## Some basic stats on the databases
+```{r}
+## All databases
+# total genes
+length(unique(immune_data$Symbol))
+# num innate immunity genes
+temp <- immune_data %>%
+  filter(isInnateGO == 1 | isInnateKEGG == 1 | isInnateInnateDB == 1 | isInnateReactome == 1)
+length(unique(temp$Symbol))
+# num adaptive immuntiy genes
+temp <- immune_data %>%
+  filter(isAdaptiveGO == 1 | isAdaptiveKEGG == 1 | isAdaptiveReactome == 1)
+length(unique(temp$Symbol))
+
+# num total pathways ##### REMOVE NAs HEREEEEEEEEEEEE
+paths <- unique(c(immune_data$GOPathwayInnate, immune_data$KEGGPathwayInnate, immune_data$InnateDBPathway, immune_data$GOPathwayAdaptive, immune_data$KEGGPathwayAdaptive, immune_data$ReactomePathwayInnate, immune_data$ReactomePathwayAdaptive))
+paths <- paths[!is.na(paths)]
+length(paths)
+# na.omit(datacollected) 
+
+# num innate immune system pathways
+inn_paths <- unique(c(immune_data$GOPathwayInnate, immune_data$KEGGPathwayInnate, immune_data$InnateDBPathway, immune_data$ReactomePathIDInnate))
+inn_paths <- inn_paths[!is.na(inn_paths)]
+length(inn_paths)
+# num adaptive immune system pathways
+adapt_paths <- unique(c(immune_data$GOPathwayAdaptive, immune_data$KEGGPathwayAdaptive, immune_data$ReactomePathIDAdaptive))
+adapt_paths <- adapt_paths[!is.na(adapt_paths)]
+length(adapt_paths)
+  
+```
+
+# GO
+```{r}
+# number of genes in GO
+temp <- immune_data %>% 
+  select(Symbol,GO) %>%
+  filter(GO==1)
+length(unique(temp$Symbol))
+
+# GO innate genes
+temp <- immune_data %>% 
+  select(Symbol, isInnateGO) %>%
+  filter(isInnateGO == 1)
+length(unique(temp$Symbol))
+
+# GO adaptive genes
+temp <- immune_data %>% 
+  select(Symbol, isAdaptiveGO) %>%
+  filter(isAdaptiveGO == 1)
+length(unique(temp$Symbol))
+
+# GO other genes
+temp <- immune_data %>% 
+  select(Symbol, isOtherGO) %>%
+  filter(isOtherGO == 1)
+length(unique(temp$Symbol))
+```
+
+```{r}
+# number of pathways in GO
+paths_temp <- unique(c(immune_data$GOPathIDInnate, immune_data$GOPathIDAdaptive, immune_data$GOPathIDOther))
+paths_temp <- paths_temp[!is.na(paths_temp)]
+length(paths_temp)
+
+# GO paths in innate
+paths_temp <- unique(immune_data$GOPathIDInnate)
+paths_temp <- paths_temp[!is.na(paths_temp)]
+length(paths_temp)
+
+# GO paths in adaptive
+paths_temp <- unique(immune_data$GOPathIDAdaptive)
+paths_temp <- paths_temp[!is.na(paths_temp)]
+length(paths_temp)
+
+# GO paths in other
+paths_temp <- unique(immune_data$GOPathIDOther)
+paths_temp <- paths_temp[!is.na(paths_temp)]
+length(paths_temp)
+```
+
+# KEGG
+```{r}
+# number of genes in KEGG
+temp <- immune_data %>% 
+  select(Symbol, KEGG) %>%
+  filter(KEGG == 1)
+length(unique(temp$Symbol))
+
+# KEGG innate genes
+temp <- immune_data %>% 
+  select(Symbol, isInnateKEGG) %>%
+  filter(isInnateKEGG == 1)
+length(unique(temp$Symbol))
+
+# KEGG adaptive genes
+temp <- immune_data %>% 
+  select(Symbol, isAdaptiveKEGG) %>%
+  filter(isAdaptiveKEGG == 1)
+length(unique(temp$Symbol))
+
+# number of pathways in KEGG
+paths_temp <- unique(c(immune_data$KEGGPathIDInnate, immune_data$KEGGPathIDAdaptive))
+paths_temp <- paths_temp[!is.na(paths_temp)]
+length(paths_temp)
+
+# KEGG paths in innate
+paths_temp <- unique(immune_data$KEGGPathIDInnate)
+paths_temp <- paths_temp[!is.na(paths_temp)]
+length(paths_temp)
+
+# KEGG paths in adaptive
+paths_temp <- unique(immune_data$KEGGPathIDAdaptive)
+paths_temp <- paths_temp[!is.na(paths_temp)]
+length(paths_temp)
+
+```
+
+# InnateDB info
+```{r}
+# number of genes in InnateDB
+temp <- immune_data %>% 
+  select(Symbol, InnateDB) %>%
+  filter(InnateDB == 1)
+length(unique(temp$Symbol))
+
+# number of pathways in InnateDB
+paths_temp <- unique(c(immune_data$InnateDBPathway))
+paths_temp <- paths_temp[!is.na(paths_temp)]
+length(paths_temp)
+
+```
+
+# ReactomeDB info
+```{r}
+
+```
+
+
+
+### Compare the whole set of genes from each database
+
+# Make Venn Diagrams to look at the set overlaps
+```{r}
+go_all = immune_data %>%
+  filter(GO == 1) %>%
+  select(Symbol, GO) %>%
+  unique() %>%
+  pull(Symbol)
+
+kegg_all = immune_data %>%
+  filter(KEGG == 1) %>%
+  select(Symbol, KEGG) %>%
+  unique() %>%
+  pull(Symbol)
+
+innatedb_all = immune_data %>%
+  filter(InnateDB == 1) %>%
+  select(Symbol, InnateDB) %>%
+  unique() %>%
+  pull(Symbol)
+
+react_all = immune_data %>%
+  filter(ReactomeDB == 1) %>%
+  select(Symbol, ReactomeDB) %>%
+  unique() %>%
+  pull(Symbol)
+
+
+fit <- euler(list(GO = go_all, KEGG = kegg_all, InnateDB = innatedb_all, ReactomeDB = react_all))
+plot(fit,
+     fills = list(fill = c("red", "steelblue4", "turquoise3", "violet"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T,
+     main = "Database Immunity Sets",
+     shape = "ellipse")
+
+db_lt = list(GO = go_all,
+          KEGG = kegg_all,
+          InnateDB = innatedb_all,
+          ReactomeDB = react_all)
+
+upset(fromList(db_lt), sets = c("GO","KEGG", "InnateDB", "ReactomeDB"), keep.order = T, order.by = "freq", empty.intersections = "on")
+grid::grid.text("Overlapping Sets of Immune System Genes Between Databases", x = 0.66, y=0.97)
+```
+
+
+
+# ComplexUpSet
+setting up the dataframe
+```{r}
+# make dataframe
+all_db_df <- immune_data %>% dplyr::select(Symbol, GO, KEGG, InnateDB, ReactomeDB, isInnateGO, isAdaptiveGO, isOtherGO, isInnateKEGG, isAdaptiveKEGG, isInnateInnateDB, isInnateReactome, isAdaptiveReactome)
+
+all_db_df$GO[is.na(all_db_df$GO)] = 0
+all_db_df$KEGG[is.na(all_db_df$KEGG)] = 0
+all_db_df$InnateDB[is.na(all_db_df$InnateDB)] = 0
+all_db_df$ReactomeDB[is.na(all_db_df$ReactomeDB)] = 0
+
+all_db_df$isInnateGO[is.na(all_db_df$isInnateGO)] = 0
+all_db_df$isInnateKEGG[is.na(all_db_df$isInnateKEGG)] = 0
+all_db_df$isInnateInnateDB[is.na(all_db_df$isInnateInnateDB)] = 0
+all_db_df$isInnateReactome[is.na(all_db_df$isInnateReactome)] = 0
+
+all_db_df$isAdaptiveGO[is.na(all_db_df$isAdaptiveGO)] = 0
+all_db_df$isAdaptiveKEGG[is.na(all_db_df$isAdaptiveKEGG)] = 0
+all_db_df$isAdaptiveReactome[is.na(all_db_df$isAdaptiveReactome)] = 0
+
+all_db_df$isOtherGO[is.na(all_db_df$isOtherGO)] = 0
+```
+make immune component feature
+```{r}
+immune_complex_plot <- all_db_df %>% dplyr::select(Symbol, GO, KEGG, InnateDB, ReactomeDB, isInnateGO, isAdaptiveGO, isOtherGO, isInnateKEGG, isAdaptiveKEGG, isInnateInnateDB, isInnateReactome, isAdaptiveReactome) %>%
+  unique()
+
+immune_complex_plot <- immune_complex_plot[!duplicated(immune_complex_plot), ]
+rownames(immune_complex_plot) <- immune_complex_plot$Symbol
+databases = c("GO", "KEGG", "InnateDB", "ReactomeDB")
+
+#immune_complex_plot[databases] = immune_complex_plot[databases] == 1
+
+#immune_complex_plot <- immune_complex_plot %>%
+#  select(Symbol, GO, KEGG) 
+
+# transform immune data
+immune_complex_plot$ImmComp <- ifelse((immune_complex_plot$isInnateGO == 1 | immune_complex_plot$isInnateKEGG == 1 | immune_complex_plot$isInnateInnateDB == 1 | immune_complex_plot$isInnateReactome == 1) & (immune_complex_plot$isAdaptiveGO == 0 & immune_complex_plot$isAdaptiveKEGG == 0 & immune_complex_plot$isAdaptiveReactome == 0) & (immune_complex_plot$isOtherGO == 0), "Innate", 
+                                      ifelse((immune_complex_plot$isInnateGO == 0 & immune_complex_plot$isInnateKEGG == 0 & immune_complex_plot$isInnateInnateDB == 0 & immune_complex_plot$isInnateReactome == 0) & (immune_complex_plot$isAdaptiveGO == 1 | immune_complex_plot$isAdaptiveKEGG == 1 | immune_complex_plot$isAdaptiveReactome == 1) & (immune_complex_plot$isOtherGO == 0), "Adaptive",
+                                             ifelse((immune_complex_plot$isInnateGO == 0 & immune_complex_plot$isInnateKEGG == 0 & immune_complex_plot$isInnateInnateDB == 0 & immune_complex_plot$isInnateReactome == 0) & (immune_complex_plot$isAdaptiveGO == 0 & immune_complex_plot$isAdaptiveKEGG == 0 & immune_complex_plot$isAdaptiveReactome == 0) & (immune_complex_plot$isOtherGO == 1), "General",
+                                                    ifelse((immune_complex_plot$isInnateGO == 1 | immune_complex_plot$isInnateKEGG == 1 | immune_complex_plot$isInnateInnateDB == 1 | immune_complex_plot$isInnateReactome == 1) & (immune_complex_plot$isAdaptiveGO == 1 | immune_complex_plot$isAdaptiveKEGG == 1 | immune_complex_plot$isAdaptiveReactome == 1) & (immune_complex_plot$isOtherGO == 0), "Innate&Adaptive", 
+                                                           ifelse((immune_complex_plot$isInnateGO == 1 | immune_complex_plot$isInnateKEGG == 1 | immune_complex_plot$isInnateInnateDB == 1 | immune_complex_plot$isInnateReactome == 1) & (immune_complex_plot$isAdaptiveGO == 0 & immune_complex_plot$isAdaptiveKEGG == 0 & immune_complex_plot$isAdaptiveReactome == 0) & (immune_complex_plot$isOtherGO == 1), "Innate&General",
+                                                                  ifelse((immune_complex_plot$isInnateGO == 0 & immune_complex_plot$isInnateKEGG == 0 & immune_complex_plot$isInnateInnateDB == 0& immune_complex_plot$isInnateReactome == 0) & (immune_complex_plot$isAdaptiveGO == 1 | immune_complex_plot$isAdaptiveKEGG == 1 | immune_complex_plot$isAdaptiveReactome == 1) & (immune_complex_plot$isOtherGO == 1), "Adaptive&General",
+                                                                         ifelse((immune_complex_plot$isInnateGO == 1 | immune_complex_plot$isInnateKEGG == 1 | immune_complex_plot$isInnateInnateDB == 1 | immune_complex_plot$isInnateReactome == 1) & (immune_complex_plot$isAdaptiveGO == 1 | immune_complex_plot$isAdaptiveKEGG == 1 | immune_complex_plot$isAdaptiveReactome == 1) & (immune_complex_plot$isOtherGO == 1), "All Components","None")))))))
+
+```
+make the plot
+```{r}
+library(ComplexUpset)
+upset(
+    immune_complex_plot,
+    databases,
+    group_by = "degree",
+    sort_intersections=FALSE,
+    intersections=list(
+        'ReactomeDB',
+        'KEGG',
+        'GO',
+        'InnateDB',
+        
+        c('ReactomeDB', 'KEGG'),
+        c('KEGG','InnateDB'),
+        c('GO', 'InnateDB'),
+        c('InnateDB','ReactomeDB'),
+        c('KEGG','GO'),
+        c('ReactomeDB','GO'),
+        
+        c('ReactomeDB', 'GO','KEGG'),
+        c('ReactomeDB', 'InnateDB','KEGG'),
+        c('ReactomeDB', 'GO','InnateDB'),
+        
+        c('ReactomeDB', 'GO','KEGG','InnateDB')
+    ),
+    base_annotations=list(
+        'Intersection size'=intersection_size(
+            counts=TRUE,
+            mapping=aes(fill=ImmComp),
+            bar_number_threshold = 1
+        )+ scale_fill_manual(values=c(
+            'Innate'='#00AFB5', 
+            'Adaptive'='#FF0054',
+            'Innate&Adaptive'='#9D4EDD', 
+            'General'='#39CB5D',
+            'Innate&General'='#0B4FE1',
+            'Adaptive&General'='#FB5607',
+            'All Components'= 'black'
+        ))
+    ),
+    width_ratio=0.1,
+    wrap = T,
+    set_sizes=(
+        upset_set_size()
+        + theme(text=element_text(size = 30),
+                axis.text.x=element_text(angle=90),
+                legend.text = element_text(size = 25))
+    ),
+    themes=upset_modify_themes(
+        list(
+            'intersections_matrix' = theme(text=element_text(size=20)),
+            'overall_sizes' = theme(axis.text.x=element_text(size=20)),
+            "default" = theme(text=element_text(size=30))
+        )
+    )
+) #+ ggtitle('Immune Databases and Immune Components')
+```
+
+
+
+
+
+```{r}
+# Looking at paths in GO.general 
+other <- unique(immune_data$GOPathwayOther) # seem to be mixed
+other <- other[!is.na(other)]
+other
+```
+
+```{r}
+# get an example of a gene in innate and adaptive 
+
+immune_data %>%
+  filter(isAdaptiveGO == 1) %>%
+  filter(isAdaptiveKEGG == 1) %>%
+  filter(isInnateGO == 0) %>%
+  filter(isInnateKEGG == 0) %>%
+  filter(isInnateInnateDB == 0)
+
+```
+
+
+
+###### Venn Diagrams
+```{r}
+#GO
+fit <- euler(list(GO = go_all, KEGG = kegg_all))
+plot(fit,
+     fills = list(fill = c("red", "steelblue4"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     main = "GO and KEGG All Immunity Genes",
+     shape = "ellipse")
+fit <- euler(list(GO = go_all, InnateDB = innatedb_all))
+plot(fit,
+     fills = list(fill = c("red", "turquoise3"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     main = "GO and InnateDB All Immunity Genes",
+     shape = "ellipse")
+
+```
+
+```{r}
+# KEGG
+
+fit <- euler(list(KEGG = kegg_all, InnateDB = innatedb_all))
+plot(fit,
+     fills = list(fill = c("steelblue4", "turquoise3"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     main = "KEGG and InnateDB All Immunity Genes",
+     shape = "ellipse")
+
+```
+
+
+
+
+
+# Compute Jaccard indeces of the databases as a whole
+
+```{r}
+## Making object just with databases
+  
+go_temp = immune_data %>% filter(GO == 1) %>% unique() %>% select(Symbol)
+go_temp$Database = "GO"
+
+innatedb_temp = immune_data %>% filter(InnateDB == 1) %>% unique() %>% select(Symbol)
+innatedb_temp$Database = "InnateDB"
+
+kegg_temp = immune_data %>% filter(KEGG == 1) %>% unique() %>% select(Symbol)
+kegg_temp$Database = "KEGG"
+
+react_temp = immune_data %>% filter(ReactomeDB == 1) %>% unique() %>% select(Symbol)
+react_temp$Database = "ReactomeDB"
+
+# remove rows that are duplicates
+Data_db = dplyr::bind_rows(go_temp, innatedb_temp) %>% dplyr::bind_rows(., kegg_temp) %>% dplyr::bind_rows(., react_temp)
+Data_db = unique(Data_db)
+Data_db = Data_db[,c("Database", "Symbol")] # make sure order column
+
+jacc_db <- jaccard_sim(Data_db)
+# make sure values are the proper type
+jacc_db$Node.1 <- as.character(jacc_db$Node.1)
+jacc_db$Node.2 <- as.character(jacc_db$Node.2)
+jacc_db$weight <- as.numeric(jacc_db$weight)
+
+jacc_db_g <- graph.data.frame(jacc_db)
+jacc_db_mat <- as.matrix(get.adjacency(jacc_db_g, attr='weight'))
+jacc_db_mat_full <- jacc_db_mat + t(jacc_db_mat) + diag(dim(jacc_db_mat)[1])
+
+
+superheat(jacc_db_mat_full, heat.pal = c("white", "red"), heat.pal.values = c(0, 0.07, 1), X.text = round(jacc_db_mat_full,3), title = "Jaccard Similarity Between Databases")
+
+```
+
+```{r}
+# Express Jaccard as a graph
+
+g = graph_from_adjacency_matrix(jacc_db_mat_full, mode = "undirected", weighted = TRUE)
+#g = delete.edges(g, E(g)[E(g)$weight == 0])
+
+E(g)$width = E(g)$weight
+V(g)$size = strength(g)
+
+V(g)$color = V(g)$frame.color = "#2a9e8f"
+V(g)$label.color = "#264660"
+E(g)$color = "grey66"
+
+#coord = layout_with_drl(g, weights = E(g)$weight^3)
+#plot(simplify(g), layout = coord)
+
+require(ggraph)
+ggraph(g, 'stress') +
+  geom_edge_hive(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = size, color = "red")) +
+  geom_node_text(aes(label = name),
+                 size = 3) +
+  scale_edge_width(range = c(0.2, 1)) +
+  theme_void()
+
+```
+
+```{r}
+## Jaccard similarity and immune components
+
+# GO
+go_innate_df = as.data.frame(go_innate, stringsAsFactors = F)
+colnames(go_innate_df) = "Symbol"
+go_innate_df$Database = "GO.innate"
+go_adapt_df = as.data.frame(go_adapt, stringsAsFactors = F)
+colnames(go_adapt_df) = "Symbol"
+go_adapt_df$Database = "GO.adapt"
+go_other_df = as.data.frame(go_other, stringsAsFactors = F)
+colnames(go_other_df) = "Symbol"
+go_other_df$Database = "GO.general"
+
+# InnateDB
+innatedb_innate_df = as.data.frame(innatedb_all, stringsAsFactors = F)
+colnames(innatedb_innate_df) = "Symbol"
+innatedb_innate_df$Database = "InnateDB"
+
+# KEGG
+kegg_innate_df = as.data.frame(kegg_innate, stringsAsFactors = F)
+colnames(kegg_innate_df) = "Symbol"
+kegg_innate_df$Database = "KEGG.innate"
+kegg_adapt_df = as.data.frame(kegg_adapt, stringsAsFactors = F)
+colnames(kegg_adapt_df) = "Symbol"
+kegg_adapt_df$Database = "KEGG.adapt"
+
+
+
+# form the df to calculate Jaccard Similarity
+Data_comp = dplyr::bind_rows(go_innate_df, go_adapt_df) %>% 
+  dplyr::bind_rows(., go_other_df) %>% 
+  dplyr::bind_rows(., innatedb_innate_df) %>% 
+  dplyr::bind_rows(., kegg_innate_df) %>% 
+  dplyr::bind_rows(., kegg_adapt_df)
+Data_comp = unique(Data_comp)
+Data_comp = Data_comp[,c("Database", "Symbol")] # make sure order column
+
+jacc_comp <- jaccard_sim(Data_comp)
+# make sure values are the proper type
+jacc_comp$Node.1 <- as.character(jacc_comp$Node.1)
+jacc_comp$Node.2 <- as.character(jacc_comp$Node.2)
+jacc_comp$weight <- as.numeric(jacc_comp$weight)
+
+jacc_comp_g <- graph.data.frame(jacc_comp)
+jacc_comp_mat <- as.matrix(get.adjacency(jacc_comp_g, attr='weight'))
+jacc_comp_mat_full <- jacc_comp_mat + t(jacc_comp_mat) + diag(dim(jacc_comp_mat)[1])
+
+
+superheat(jacc_comp_mat_full, heat.pal = c("white", "red"), heat.pal.values = c(0, 0.1, 1), 
+          X.text = round(jacc_comp_mat_full,3), X.text.size = 3.5,
+          title = "Jaccard Similarity Between Databases and Immunity Components", title.size = 4,
+          bottom.label.text.size = 3, left.label.text.size = 3
+          )
+
+ggplot(jacc_comp) +
+  aes(x = Node.1, y = Node.2, fill = weight) +
+  geom_tile(size = 1.2) +
+  scale_fill_distiller(palette = "Reds", direction = 1) +
+  labs(x = "", y = "", title = "Jaccard Similarity Between Databases and Immunity Components") +
+  theme_minimal()
+
+
+CairoPDF("Database_Jaccard_Imm_Components.pdf", width = 25, height = 15)
+plot
+dev.off()
+
+
+```
+
+```{r}
+jacc_comp_g = graph_from_adjacency_matrix(jacc_comp_mat_full, mode = "undirected", weighted = TRUE)
+#jacc_comp_g = delete.edges(jacc_comp_g, E(jacc_comp_g)[E(jacc_comp_g)$weight == 0])
+
+E(jacc_comp_g)$width = E(jacc_comp_g)$weight
+V(jacc_comp_g)$size = strength(jacc_comp_g)
+
+V(jacc_comp_g)$color = V(jacc_comp_g)$frame.color = "#2a9e8f"
+V(jacc_comp_g)$label.color = "#264660"
+E(jacc_comp_g)$color = "grey66"
+
+#coord = layout_with_drl(g, weights = E(g)$weight^3)
+#plot(simplify(g), layout = coord)
+
+require(ggraph)
+ggraph(jacc_comp_g, 'stress') +
+  geom_edge_hive(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = size, color = "red")) +
+  geom_node_text(aes(label = name),
+                 size = 3) +
+  scale_edge_width(range = c(0.2, 1)) +
+  theme_void()
+```
+
+# Testing for statistical significance between set overlaps
+
+data = matrix(data=c(1,0,0,0,0,7, 5,6,8,8,5,8), nrow=6)
+
+colnames(data) = c("intersection", "universe")
+rownames(data) = c("dis_1", "dis_2", "dis_3", "dis_4", "dis_5", "dis_6")
+
+data
+
+fisher.test(data)
+
+```{r}
+## Fischer Exact Test
+
+databases = unique(as.character(Data_db$Database))
+col_labels <- c("DB.1", "DB.2", "p_value")
+fischer_db_df <- data.frame(matrix(ncol = 3, nrow = 0))
+colnames(fischer_db_df) <- col_labels
+
+# Data_db
+# for(i in 1:(length(databases)-1)){
+  # for(j in (i+1):length(databases)){
+  
+  # from Data_db, get rows of i and j
+  # 
+
+  #}
+#}
+
+# Data_comp
+```
+
+
+
+```{r}
+## hypergeom test to test for significance of each pair
+
+databases = unique(as.character(Data_db$Database))
+col_labels <- c("DB.1", "DB.2", "weight")
+hyper_db_df <- data.frame(matrix(ncol = 3, nrow = 0))
+colnames(hyper_db_df) <- col_labels
+
+for(i in 1:(length(databases)-1)){
+  for(j in (i+1):length(databases)){
+    
+    genes_i <- unique(Data_db[which(Data_db$Database == databases[i]),][2])
+    genes_j <- unique(Data_db[which(Data_db$Database == databases[j]),][2])
+    all_genes <- unique(rbind(genes_i, genes_j))
+    
+    universe_success <- intersect(genes_i, genes_j)
+    q <- dim(universe_success)[1] / dim(all_genes)[1]
+    universe_failure <- all_genes[!(all_genes %in% universe_success)]
+    size_collected <- dim(all_genes)[1] 
+    #size_collected <- length(unique(Data_db$Symbol))
+    
+    temp <- c(databases[i], databases[j], Hypergeometric.test(q, dim(universe_success)[1], 
+                                                            dim(universe_failure)[1], size_collected))
+    hyper_db_df[nrow(hyper_db_df)+1,] <- temp
+    
+  }
+}
+
+hyper_db_df$DB.1 <- as.character(hyper_db_df$DB.1)
+hyper_db_df$DB.2 <- as.character(hyper_db_df$DB.2)
+hyper_db_df$weight <- as.numeric(hyper_db_df$weight)
+
+hyper_db_g <- graph.data.frame(hyper_db_df)
+hyper_db_mat <- as.matrix(get.adjacency(hyper_db_g, attr='weight'))
+
+hyper_db_mat_full <- hyper_db_mat + t(hyper_db_mat)
+
+superheat(hyper_db_mat_full, pretty.order.rows = T, pretty.order.cols=T, scale=F)
+```
+
+
+
+
+## Does each db make an LCC
+
+# GO LCC
+```{r}
+ppi_go_all = go_all[go_all %in% V(ppi_g)$name]
+LCC_go_all = LCC_signif(G = ppi_g, targets = ppi_go_all, num_bins_degree_G = 1, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_go_all$size, LCC_go_all$distribution)
+hist(LCC_go_all$distribution, main = "GO Immune System Empirical LCC Distribution", 
+     xlim = c(min(lim - 50), max(lim)+50), ylim = c(0, 200), col = 'gray75', 
+     xlab = "LCC Size", ylab = "LCC Frequency", breaks = 20)
+abline(v = LCC_go_all$size, col = "red", text = c("LCC = ", LCC_go_all$size))
+text(LCC_go_all$size, 175, labels = paste0("Observed LCC size = ", LCC_go_all$size), srt=0.2, pos=2.5, col = "red")
+
+#LCC_go_distrib <- as.data.frame(LCC_go_all$distribution)
+#LCC_go_distrib %>%
+#  summarize(n=n()) %>%
+#  ggplot()+
+#  aes()
+
+## Degree distribution of genes in the LCC
+
+go_all_graph <- induced_subgraph(ppi_g, ppi_go_all)
+temp <- components(go_all_graph)$membership
+inLCC_go_all = names(temp[temp == 1])
+LCC_go_all_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_go_all) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+#ggplot(LCC_go_all_df) +
+  #aes(x = Degree, y = n) +
+  #geom_point(size = 1L, colour = "#bd3786") +
+  #scale_x_continuous(trans = "log10") +
+  #scale_y_continuous(trans = "log10") +
+  #labs(x = "Degree", y = "Freq.", title = "Degrees of GO Proteins in LCC") +
+  #theme_minimal()
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_go_all_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10", limits = c(1, 1050)) +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of GO Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_go_all = names(temp[temp != 1])
+nonLCC_go_all_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_go_all) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_go_all_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of GO Proteins Not in LCC") +
+  theme_minimal()
+
+CairoPDF("GO_LCC_plots.pdf", width = 25, height = 20)
+
+dev.off()
+
+
+
+```
+
+# KEGG LCC
+```{r}
+ppi_kegg_all = kegg_all[kegg_all %in% V(ppi_g)$name]
+
+LCC_kegg_all = LCC_signif(G = ppi_g, targets = ppi_kegg_all, num_bins_degree_G = 1, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_kegg_all$size, LCC_kegg_all$distribution)
+hist(LCC_kegg_all$distribution, main = "KEGG Immune System Empirical LCC Distribution", 
+     xlab = "LCC Size", ylab = "LCC Frequency",
+     xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 150), 
+     col = 'gray75', breaks = 20)
+
+abline(v = LCC_kegg_all$size, col = "red")
+text(LCC_kegg_all$size, 145, labels = paste0("Observed LCC size = ", LCC_kegg_all$size), srt=0.2, pos=2.5, col = "red")
+
+## Degree distribution of genes in the LCC
+kegg_all_graph <- induced_subgraph(ppi_g, ppi_kegg_all)
+temp <- components(kegg_all_graph)$membership
+inLCC_kegg_all = names(temp[temp == 1])
+
+LCC_kegg_all_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_kegg_all) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_kegg_all_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0 ))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of KEGG Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_kegg_all = names(temp[temp != 1])
+nonLCC_kegg_all_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_kegg_all) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_kegg_all_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0 ))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of KEGG Proteins Not in LCC") +
+  theme_minimal()
+
+```
+
+# InnateDB LCC
+```{r}
+ppi_innatedb_all = innatedb_all[innatedb_all %in% V(ppi_g)$name]
+
+LCC_innatedb_all = LCC_signif(G = ppi_g, targets = ppi_innatedb_all, num_bins_degree_G = 1, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_innatedb_all$size, LCC_innatedb_all$distribution)
+hist(LCC_innatedb_all$distribution, main = "InnateDB Immune System Empirical LCC Distribution", 
+     xlab = "LCC Size", ylab = "LCC Frequency",
+     xlim = c(350, 900), ylim = c(0, 150), col = 'gray75', breaks = 20)
+
+abline(v = LCC_innatedb_all$size, col = "red")
+text(LCC_innatedb_all$size, 145, labels = paste0("Observed LCC size = ", LCC_innatedb_all$size), srt=0.2, pos=2.5, col = "red")
+
+
+## Degree distribution of genes in the LCC
+innatedb_all_graph <- induced_subgraph(ppi_g, ppi_innatedb_all)
+temp <- components(innatedb_all_graph)$membership
+inLCC_innatedb_all = names(temp[temp == 1])
+
+LCC_innatedb_all_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_innatedb_all) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_innatedb_all_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0 ))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of InnateDB Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_innatedb_all = names(temp[temp != 1])
+nonLCC_innatedb_all_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_innatedb_all) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_innatedb_all_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0 ))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of InnateDB Proteins Not in LCC") +
+  theme_minimal()
+```
+
+
+# ReactomeDB LCC
+```{r}
+ppi_reactome_all = react_all[react_all %in% V(ppi_g)$name]
+
+LCC_reactome_all = LCC_signif(G = ppi_g, targets = ppi_reactome_all, num_bins_degree_G = 1, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_reactome_all$size, LCC_reactome_all$distribution)
+hist(LCC_reactome_all$distribution, main = "ReactomeDB Whole Immunity Empirical LCC Distribution", xlim = c(min(lim - 50), max(lim)+50), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+abline(v = LCC_reactome_all$size, col = "red")
+text(LCC_reactome_all$size, 145, labels = paste0("Observed LCC size = ", LCC_reactome_all$size), srt=0.2, pos=2.5, col = "red")
+
+## Degree distribution of genes in the LCC
+reactome_all_graph <- induced_subgraph(ppi_g, ppi_reactome_all)
+temp <- components(reactome_all_graph)$membership
+inLCC_reactome_all = names(temp[temp == 1])
+
+LCC_reactome_all_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_reactome_all) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_reactome_all_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0 ))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of ReactomeDB Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_reactome_all = names(temp[temp != 1])
+nonLCC_reactome_all_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_reactome_all) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_reactome_all_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0 ))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of ReactomeDB Proteins Not in LCC") +
+  theme_minimal()
+```
+
+
+
+
+```{r}
+# Does the intersection form a module
+
+all_intersection = immune_data %>%
+  filter(GO==1 & KEGG==1 & InnateDB==1 & ReactomeDB==1) %>%
+  select(Symbol) %>%
+  unique()
+
+all_inter_genes = unique(all_intersection$Symbol)
+ppi_inter = all_inter_genes[all_inter_genes %in% V(ppi_g)$name]
+
+LCC_inter = LCC_signif(G = ppi_g, targets = ppi_inter, num_bins_degree_G = 1, min_bin_degree = 20, iter = 1000)
+
+#LCC_test = NetSci::LCC_Significance(N = 1000, G = ppi_g, Targets = ppi_inter, bins = 1)
+
+## Plotting
+lim = c(LCC_inter$size, LCC_inter$distribution)
+hist(LCC_inter$distribution, main = "Intersection of Immune Databases Empirical LCC Distribution", 
+     xlab = "LCC Size", ylab = "LCC Frequency",
+     xlim = c(-25, 150), ylim = c(0, 450), col = 'gray75', breaks = 20)
+
+abline(v = LCC_inter$size, col = "red")
+text(LCC_inter$size, 145, labels = paste0("Observed LCC size = ", LCC_inter$size), srt=0.2, pos=2.5, col = "red")
+
+# Plot Distributions
+inter_graph <- induced_subgraph(ppi_g, ppi_inter)
+temp <- components(inter_graph)$membership
+inLCC_inter = names(temp[temp == 1])
+
+LCC_inter_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_inter) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_inter_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10", limits = c(1, 1050)) +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of Proteins in LCC") +
+  theme_minimal()
+
+
+nonLCC_inter = names(temp[temp != 2])
+nonLCC_inter_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_inter) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_inter_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of Proteins Not in LCC") +
+  theme_minimal()
+
+```
+```{r}
+degree(inter_graph)
+```
+
+
+
+
+
+
+
+
+# Module Separation S_ab of Database Immunity Modules
+```{r}
+
+SAB = separation(G = ppi_g, 
+                 ST = Data_db)
+#SAB
+Sep = SAB$Sab %>% as.matrix()
+Sep[lower.tri(Sep)] = t(Sep)[lower.tri(Sep)]
+S = Sep %>% as.matrix()
+superheat(S, heat.pal = c("mediumblue", "white"), X.text = round(S,3), X.text.col = "white", title = "S_ab Separation Between Database Modules")
+
+sep_g = graph_from_adjacency_matrix(S, mode = "undirected", weighted = TRUE)
+sep_g = delete.edges(sep_g, E(sep_g)[E(sep_g)$weight == 0])
+
+E(sep_g)$width = abs(E(sep_g)$weight)
+V(sep_g)$size = strength(sep_g)
+
+V(sep_g)$color = "lightblue"
+V(sep_g)$label.color = "lightblue"
+E(sep_g)$color = "grey66"
+
+#coord = layout_with_drl(sep_g, weights = E(sep_g)$weight^3)
+#plot(simplify(sep_g), layout = coord)
+
+require(ggraph)
+ggraph(sep_g, 'stress') +
+  geom_edge_hive(aes(width = abs(weight), alpha = abs(weight))) +
+  geom_node_point(aes(size = abs(size)), colour = "lightblue")+
+  geom_node_text(aes(label = name),
+                size = 3) +
+  scale_edge_width(range = c(0.2, 0.4)) +
+  theme_void()
+
+```
+
+
+```{r}
+library(ggplot2)
+library(ggnewscale)
+# Equivalent to melt(volcano)
+topography <- expand.grid(x = 1:nrow(volcano),
+                          y = 1:ncol(volcano))
+topography$z <- c(volcano)
+
+# point measurements of something at a few locations
+set.seed(42)
+measurements <- data.frame(x = runif(30, 1, 80),
+                           y = runif(30, 1, 60),
+                           thing = rnorm(30))
+
+ggplot(mapping = aes(x, y)) +
+  geom_contour(data = topography, aes(z = z, color = stat(level))) +
+  # Color scale for topography
+  scale_color_viridis_c(option = "D") +
+  # geoms below will use another color scale
+  new_scale_color() +
+  geom_point(data = measurements, size = 3, aes(color = thing)) +
+  # Color scale applied to geoms added after new_scale_color()
+  scale_color_viridis_c(option = "F")
+
+```
+
+```{r}
+# Combine Jaccard and Sab of databases into one figure
+
+# S <- matrix for sep
+# jacc_db_mat_full
+S_temp <- S
+J_temp <- jacc_db_mat_full
+
+S_temp[lower.tri(S_temp, diag = F)] <- 0
+S_temp
+
+J_temp[upper.tri(J_temp, diag = T)] <- 0
+J_temp
+
+S_J_mat <- S_temp + J_temp
+
+
+#corrplot(S_J_mat, is.corr = F, tl.col = "black", addCoef.col = 'white',
+#         title = "Jaccard Similarity and S_ab Separation between Databases", mar=c(0,0,1,0)
+         #COL2(diverging = c("BuRd"), n = 200),
+#         )
+
+temp_g  <- graph.adjacency(S_J_mat, weighted=T)
+S_J_list <- get.data.frame(temp_g)
+
+ggplot(S_J_list) +
+  aes(x = from, y = to, fill = weight) +
+  geom_tile(size = 1.2) +
+  new_scale_color() +
+  geom_tile() + # x = from, y = to, fill = weight
+  geom_text(aes(label = round(weight, digits = 3)), color = "white") +
+  scale_fill_distiller(palette = "RdBu", direction = -1) +
+  labs(x = "", y = "", title = "Jaccard Similarity and S_ab Separation between Databases") +
+  # add ggnewscale()
+  theme_minimal()
+
+
+#S_list <- graph.adjacency(sep_g, weighted=T)
+S_list <- get.data.frame(sep_g)
+colnames(S_list)[3] <- "S_ab"
+S_list <- S_list[,c("from", "to", "S_ab")]
+S_list$color <- "black"
+
+J_list <- get.data.frame(g)
+colnames(J_list) <- c("to", "from", "Jaccard")
+J_list <- J_list[,c("to", "from", "Jaccard")]
+J_list$color <- "black"
+J_list[1,"Jaccard"] <- 0
+J_list[1,"color"] <- "white"
+J_list[4,"Jaccard"] <- 0
+J_list[4,"color"] <- "white"
+J_list[6,"Jaccard"] <- 0
+J_list[6,"color"] <- "white"
+J_list$size <- J_list$Jaccard
+
+ggplot(mapping = aes(from, to)) +
+  geom_point(data = J_list, aes(color = Jaccard, size = size)) +
+  scale_color_gradient(low = "white", high = "red") +
+  geom_text(data = J_list, aes(label = round(Jaccard, digits = 3)), color = "white") +
+  new_scale_color() +
+  geom_point(data = S_list, aes(color = S_ab, size = S_ab)) +
+  scale_color_gradient(low = "blue", high = "lightblue2") +
+  geom_text(data = S_list, aes(label = round(S_ab, digits = 3)), color = "white") +
+  scale_size(range = c(15, 20)) +
+  labs(title = "S_ab and Jaccard Similarity between Databases") +
+  theme_minimal()
+
+```
+
+
+
+
+
+
+################################################################################# Now compare innate and adaptive immunities only
+```{r}
+## Make sets of things
+
+# GO
+go_innate = immune_data %>%
+  filter(isInnateGO == 1) %>%
+  select(Symbol, GO) %>%
+  unique()
+go_innate = unique(go_innate$Symbol)
+go_adapt = immune_data %>%
+  filter(isAdaptiveGO == 1) %>%
+  select(Symbol, GO) %>%
+  unique()
+go_adapt = unique(go_adapt$Symbol)
+go_other = immune_data %>%
+  filter(isOtherGO == 1) %>%
+  select(Symbol, GO) %>%
+  unique()
+go_other = unique(go_other$Symbol)
+
+# KEGG
+k_both_paths = intersect(immune_data$KEGGPathwayAdaptive, immune_data$KEGGPathwayInnate)
+k_both_paths = k_both_paths[!is.na(k_both_paths)]
+
+kegg_both = immune_data %>%
+  filter(KEGGPathwayInnate %in% k_both_paths) %>%
+  dplyr::select(Symbol, KEGG) %>%
+  unique()
+kegg_both = unique(kegg_both$Symbol)
+
+kegg_innate_only = immune_data %>%
+  filter(isInnateKEGG == 1) %>%
+  filter(KEGGPathwayInnate %ni% k_both_paths) %>%
+  dplyr::select(Symbol, KEGG) %>%
+  unique()
+kegg_innate_only = unique(kegg_innate_only$Symbol)
+kegg_innate_all = unique(c(kegg_both, kegg_innate_only))
+
+kegg_adapt_only = immune_data %>%
+  filter(isAdaptiveKEGG == 1) %>%
+  filter(KEGGPathwayAdaptive %ni% k_both_paths) %>%
+  dplyr::select(Symbol, KEGG, KEGGPathwayAdaptive) %>%
+  unique()
+kegg_adapt_only = unique(kegg_adapt_only$Symbol)
+kegg_adapt_all = unique(c(kegg_both, kegg_adapt_only))
+
+# ReactomeDB
+r_both_paths = intersect(immune_data$ReactomePathwayAdaptive, immune_data$ReactomePathwayInnate)
+r_both_paths = r_both_paths[!is.na(r_both_paths)]
+
+reactome_both = immune_data %>%
+  filter(ReactomePathwayInnate %in% r_both_paths) %>%
+  dplyr::select(Symbol, ReactomeDB) %>%
+  unique()
+reactome_both = unique(reactome_both$Symbol)
+
+reactome_innate_only = immune_data %>%
+  filter(isInnateReactome == 1) %>%
+  filter(ReactomePathwayInnate %ni% r_both_paths) %>%
+  dplyr::select(Symbol, ReactomeDB) %>%
+  unique()
+reactome_innate_only = unique(reactome_innate_only$Symbol)
+reactome_innate_all = unique(c(reactome_both, reactome_innate_only))
+
+reactome_adapt_only = immune_data %>%
+  filter(isAdaptiveReactome == 1) %>%
+  filter(ReactomePathwayAdaptive %ni% r_both_paths) %>%
+  dplyr::select(Symbol, ReactomeDB, ReactomePathwayAdaptive) %>%
+  unique()
+reactome_adapt_only = unique(reactome_adapt_only$Symbol)
+reactome_adapt_all = unique(c(reactome_both, reactome_adapt_only))
+
+# InnateDB
+innatedb_innate = immune_data %>%
+  filter(isInnateInnateDB == 1) %>%
+  select(Symbol, InnateDB) %>%
+  unique()
+
+innatedb_innate = unique(innatedb_innate$Symbol)
+
+```
+
+```{r}
+lt = list(GO.innate = go_innate,
+          GO.adapt = go_adapt,
+          GO.other = go_other,
+          KEGG.innateOnly = kegg_innate_only,
+          KEGG.innateAll = kegg_innate_all,
+          KEGG.adaptOnly = kegg_adapt_only,
+          KEGG.adaptAll = kegg_adapt_all,
+          KEGG.both = kegg_both,
+          ReactomeDB.innateOnly = reactome_innate_only,
+          ReactomeDB.innateAll = reactome_innate_all,
+          ReactomeDB.adaptOnly = reactome_adapt_only,
+          ReactomeDB.adaptAll = reactome_adapt_all,
+          ReactomeDB.both = reactome_both,
+          InnateDB = innatedb_innate)
+```
+
+```{r}
+# Sets of only innate and adaptive immunity genes (OG gene sets)
+#upset(fromList(lt), sets = c("GO.innate","KEGG.innateAll", "ReactomeDB.innateAll", "InnateDB", "GO.adapt", 
+#                             "KEGG.adaptAll", "ReactomeDB.adaptAll"), 
+#      keep.order = T, order.by = "freq", 
+#      #empty.intersections = "on"
+#      )
+
+upset(fromList(lt), sets = c("GO.innate", "KEGG.innateOnly", "KEGG.both", "ReactomeDB.innateOnly", "ReactomeDB.both", "InnateDB"), 
+      keep.order = T, order.by = "freq", 
+      #empty.intersections = "on"
+      )
+
+upset(fromList(lt), sets = c("GO.adapt", "KEGG.adaptOnly", "KEGG.both", "ReactomeDB.adaptOnly", "ReactomeDB.both"), 
+      keep.order = T, order.by = "freq", 
+      #empty.intersections = "on"
+      )
+
+#upset(fromList(lt), sets = c("GO.innate", "KEGG.innateAll", "ReactomeDB.innateAll", "InnateDB"), 
+#      keep.order = T, order.by = "freq", 
+#      #empty.intersections = "on"
+#      )
+
+# Sets breaking things down
+upset(fromList(lt), sets = c("GO.other",
+                             "ReactomeDB.adaptOnly", "KEGG.adaptOnly", "GO.adapt",   
+                             "ReactomeDB.both", "KEGG.both",
+                             "ReactomeDB.innateOnly", "KEGG.innateOnly", "InnateDB", "GO.innate"), 
+      keep.order = T, order.by = "freq"
+      #empty.intersections = "on"
+      )
+```
+
+
+# BUT KEGG and ReactomeDB have pathways that are in both and GO has pathways that are immune paths but not in innate or adapt
+######################################################################### Now look at the immune subcomponents of each database
+
+```{r}
+# Looking at all the innate immunity databases
+# * Venn diagram does not show all of the non-zero intersections because it is difficult to visualize
+fit <- euler(list(GO = go_innate, KEGG = kegg_innate_all, InnateDB = innatedb_innate, ReactomeDB = reactome_innate_all))
+plot(fit,
+     fills = list(fill = c("red", "steelblue4", "turquoise3", "violet"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T,
+     main = "Innate Immunity Sets",
+     shape = "ellipse")
+
+# GO vs other Databases
+fit <- euler(list(GO.innate = go_innate, KEGG.innate = kegg_innate_only, KEGG.both = kegg_both))
+plot(fit,
+     fills = list(fill = c("red", "steelblue4", "mediumblue"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     main = "Innate Immunity: GO and KEGG",
+     shape = "ellipse")
+fit <- euler(list(GO.innate = go_innate, InnateDB = innatedb_innate))
+plot(fit,
+     fills = list(fill = c("red","turquoise3"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     main = "Innate Immunity: GO and InnateDB",
+     shape = "ellipse")
+fit <- euler(list(GO.innate = go_innate, ReactomeDB.innate = reactome_innate_only, ReactomeDB.both = reactome_both))
+plot(fit,
+     fills = list(fill = c("red","violet", "purple"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     main = "Innate Immunity: GO and ReactomeDB",
+     shape = "ellipse")
+
+# KEGG vs other databases
+fit <- euler(list(KEGG.innate = kegg_innate_only, InnateDB = innatedb_innate, KEGG.both = kegg_both))
+plot(fit,
+     fills = list(fill = c("steelblue4", "turquoise3", "mediumblue"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     main = "Innate Immunity: KEGG and InnateDB",
+     shape = "ellipse")
+fit <- euler(list(KEGG.innate = kegg_innate_only, KEGG.both = kegg_both, 
+                  ReactomeDB.innate = reactome_innate_only, ReactomeDB.both = reactome_both))
+plot(fit,
+     fills = list(fill = c("steelblue4", "mediumblue", "violet", "purple"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     main = "Innate Immunity: KEGG and ReactomeDB",
+     shape = "ellipse")
+
+# InnateDB vs other databases
+fit <- euler(list(InnateDB = innatedb_innate, ReactomeDB.innate = reactome_innate_only, ReactomeDB.both = reactome_both))
+plot(fit,
+     fills = list(fill = c("turquoise3", "violet", "purple"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     main = "Innate Immunity: InnateDB and ReactomeDB",
+     shape = "ellipse")
+
+```
+
+
+```{r}
+# Venn diagrams looking at adaptive immunity
+
+#fit <- euler(list(GO = go_adapt, KEGG = kegg_adapt, Reactome = reactome_adapt))
+#plot(fit,
+#     fills = list(fill = c("red", "steelblue4", "violet"), alpha = 0.4),
+#     labels = list(col = "white", font = 4),
+#     quantities = T, 
+#    main = "Adaptive Immunity Sets",
+#     shape = "ellipse")
+
+# GO vs other databases
+fit <- euler(list(GO = go_adapt, KEGG.adapt = kegg_adapt_only, KEGG.both = kegg_both))
+plot(fit,
+     fills = list(fill = c("red", "steelblue4", "mediumblue"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T,
+     main = "Adaptive Immunity Sets: GO and KEGG",
+     shape = "ellipse")
+fit <- euler(list(GO = go_adapt, ReactomeDB.adapt = reactome_adapt_only, Reactome.both = reactome_both))
+plot(fit,
+     fills = list(fill = c("red", "violet", "purple"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T,
+     main = "Adaptive Immunity Sets: GO and ReactomeDB",
+     shape = "ellipse")
+
+# KEGG vs other databases
+
+fit <- euler(list(KEGG.adapt = kegg_adapt_only, KEGG.both = kegg_both, ReactomeDB.adapty = reactome_adapt_only, ReactomeDB.both = reactome_both))
+plot(fit,
+     fills = list(fill = c("steelblue4", "mediumblue","violet", "purple"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T,
+     main = "Adaptive Immunity Sets: KEGG and ReactomeDB",
+     shape = "ellipse")
+```
+
+```{r}
+fit <- euler(list(KEGG = kegg_both, ReactomeDB = reactome_both))
+
+# Customize colors, remove borders, bump alpha, color labels white
+plot(fit,
+     fills = list(fill = c("steelblue4", "violet"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     shape = "ellipse")
+```
+
+
+## make all GO-associated venn diagrams
+
+```{r}
+fit <- euler(list(GO.innate = go_innate, KEGG.innate = kegg_innate))
+plot(fit,
+     fills = list(fill = c("darkgreen","red", "steelblue4"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     #main
+     shape = "ellipse")
+fit <- euler(list(GO.other = go_other, GO.innate = go_innate, InnateDB = innatedb_innate))
+plot(fit,
+     fills = list(fill = c("darkgreen","red","turquoise3"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     #main = "Innate Immunity: GO and InnateDB",
+     shape = "ellipse")
+fit <- euler(list(GO.other = go_other, GO.innate = go_innate, ReactomeDB.innate = reactome_innate))
+plot(fit,
+     fills = list(fill = c("darkgreen","red","violet"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     #main = "Innate Immunity: GO and ReactomeDB",
+     shape = "ellipse")
+```
+
+
+```{r}
+## hypergeom test to test for significance of each pair
+
+databases = unique(as.character(Data_db$Database))
+col_labels <- c("DB.1", "DB.2", "weight")
+hyper_db_df <- data.frame(matrix(ncol = 3, nrow = 0))
+colnames(hyper_db_df) <- col_labels
+
+for(i in 1:(length(databases)-1)){
+  for(j in (i+1):length(databases)){
+    
+    genes_i <- unique(Data_db[which(Data_db$Database == databases[i]),][1])
+    genes_j <- unique(Data_db[which(Data_db$Database == databases[j]),][1])
+    all_genes <- unique(rbind(genes_i, genes_j))
+    
+    universe_success <- intersect(genes_i, genes_j)
+    q <- dim(universe_success)[1] / dim(all_genes)[1]
+    universe_failure <- all_genes[!(all_genes %in% universe_success)]
+    size_collected <- dim(all_genes)[1]
+    
+    temp <- c(databases[i], databases[j], Hypergeometric.test(q, dim(universe_success)[1], 
+                                                            dim(universe_failure)[1], size_collected))
+    hyper_db_df[nrow(hyper_db_df)+1,] <- temp
+    
+  }
+}
+
+hyper_db_df$DB.1 <- as.character(hyper_db_df$DB.1)
+hyper_db_df$DB.2 <- as.character(hyper_db_df$DB.2)
+hyper_db_df$weight <- as.numeric(hyper_db_df$weight)
+
+hyper_db_g <- graph.data.frame(hyper_db_df)
+hyper_db_mat <- as.matrix(get.adjacency(hyper_db_g, attr='weight'))
+
+hyper_db_mat_full <- hyper_db_mat + t(hyper_db_mat)
+
+superheat(hyper_db_mat_full, pretty.order.rows = T, pretty.order.cols=T, scale=F)
+```
+
+## Now, break up the databases into subsets (ie, innate, adapt, other, both) and see how the Jaccard indeces change
+```{r}
+go_innate_temp = as.data.frame(go_innate, stringsAsFactors = F)
+colnames(go_innate_temp) = "Symbol"
+go_innate_temp$Database = "GO.innate"
+go_adapt_temp = as.data.frame(go_adapt, stringsAsFactors = F)
+colnames(go_adapt_temp) = "Symbol"
+go_adapt_temp$Database = "GO.adapt"
+go_other_temp = as.data.frame(go_other, stringsAsFactors = F)
+colnames(go_other_temp) = "Symbol"
+go_other_temp$Database = "GO.other"
+
+# reuse innatedb_temp for InnateDB
+
+kegg_innate_temp = as.data.frame(kegg_innate_only, stringsAsFactors = F)
+colnames(kegg_innate_temp) = "Symbol"
+kegg_innate_temp$Database = "KEGG.innate"
+kegg_adapt_temp = as.data.frame(kegg_adapt_only, stringsAsFactors = F)
+colnames(kegg_adapt_temp) = "Symbol"
+kegg_adapt_temp$Database = "KEGG.adapt"
+kegg_both_temp = as.data.frame(kegg_both, stringsAsFactors = F)
+colnames(kegg_both_temp) = "Symbol"
+kegg_both_temp$Database = "KEGG.both"
+
+reactome_innate_temp = as.data.frame(reactome_innate_only, stringsAsFactors = F)
+colnames(reactome_innate_temp) = "Symbol"
+reactome_innate_temp$Database = "ReactomeDB.innate"
+reactome_adapt_temp = as.data.frame(reactome_adapt_only, stringsAsFactors = F)
+colnames(reactome_adapt_temp) = "Symbol"
+reactome_adapt_temp$Database = "ReactomeDB.adapt"
+reactome_both_temp = as.data.frame(reactome_both, stringsAsFactors = F)
+colnames(reactome_both_temp) = "Symbol"
+reactome_both_temp$Database = "ReactomeDB.both"
+
+Data_db_all_subsets = bind_rows(go_innate_temp, go_other_temp) %>% bind_rows(., go_adapt_temp) %>%
+  bind_rows(., innatedb_temp) %>% bind_rows(., kegg_innate_temp) %>% bind_rows(., kegg_adapt_temp) %>%
+  bind_rows(., kegg_both_temp) %>% bind_rows(., reactome_innate_temp) %>% 
+  bind_rows(., reactome_adapt_temp) %>% bind_rows(., reactome_both_temp) %>% unique()
+
+Data_db_all_subsets = Data_db_all_subsets[,c("Database", "Symbol")] # make sure order column
+jacc_db_all_sub <- jaccard_sim(Data_db_all_subsets)
+```
+
+
+```{r}
+# make sure values are the proper type
+jacc_db_all_sub$Node.1 <- as.character(jacc_db_all_sub$Node.1)
+jacc_db_all_sub$Node.2 <- as.character(jacc_db_all_sub$Node.2)
+jacc_db_all_sub$weight <- as.numeric(jacc_db_all_sub$weight)
+
+jacc_db_g <- graph.data.frame(jacc_db_all_sub)
+jacc_db_mat <- as.matrix(get.adjacency(jacc_db_g, attr='weight'))
+jacc_db_mat_full <- jacc_db_mat + t(jacc_db_mat) + diag(dim(jacc_db_mat)[1])
+
+superheat(jacc_db_mat_full, bottom.label.text.angle = 90, heat.pal = c("white","black"), heat.pal.values = c(0, 0.11, 1), 
+          X.text = round(jacc_db_mat_full,2), X.text.col = "black",
+          pretty.order.rows = T, pretty.order.cols = T, bottom.label.text.size = 2.5,
+          bottom.label.col = c("turquoise3", "violet", "tomato1", "turquoise3", 
+                               "turquoise3", "tomato1","olivedrab1", "turquoise3", "tomato1","olivedrab1"),
+          left.label.col = c("turquoise3", "violet", "tomato1", "turquoise3", 
+                               "turquoise3", "tomato1","olivedrab1", "turquoise3", "tomato1","olivedrab1")) 
+```
+
+
+```{r}
+# Express Jaccard as a graph
+
+g = graph_from_adjacency_matrix(jacc_db_mat_full, mode = "undirected", weighted = TRUE)
+#g = delete.edges(g, E(g)[E(g)$weight == 0])
+
+E(g)$width = E(g)$weight
+V(g)$size = strength(g) + 3.5
+
+innate_comp = c("GO.innate", "KEGG.innate", "ReactomeDB.innate", "InnateDB") # make this red
+adapt_comp = c("GO.adapt", "KEGG.adapt", "ReactomeDB.adapt") # make this blue
+both_comp = c("KEGG.both", "ReactomeDB.both") # make this purple
+other_comp = c("GO.other") # make this green
+
+V(g)$type = ifelse(V(g)$name %in% innate_comp, "Innate Module", 
+                   ifelse(V(g)$name %in% adapt_comp, "Adaptive Module",
+                          ifelse(V(g)$name %in% both_comp, "Both Innate and Adapt.", "Other Immunity")))
+V(g)$label.color = "#264660"
+E(g)$color = "grey66"
+
+#coord = layout_with_drl(g, weights = E(g)$weight^3)
+#plot(simplify(g), layout = coord)
+
+require(ggraph)
+ggraph(g, 'stress') +
+  geom_edge_hive(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = size, color = type)) +
+  geom_node_text(aes(label = name, size = size),
+                 ) +
+  scale_edge_width(range = c(0.2, 1)) +
+  theme_void()
+
+```
+
+
+
+
+
+# Does each db make an LCC
+```{r}
+# GO Innate LCC
+ppi_go_innate = go_innate[go_innate %in% V(ppi_g)$name]
+go_innate_graph <- induced_subgraph(ppi_g, ppi_go_innate)
+temp <- components(go_innate_graph)$membership
+inLCC_go_innate = names(temp[temp == 1])
+
+LCC_go_innate = LCC_signif(G = ppi_g, targets = inLCC_go_innate, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_go_innate$size, LCC_go_innate$distribution)
+hist(LCC_go_innate$distribution, main = "GO Innate Immunity Empirical LCC Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_go_innate$size, col = "red")
+```
+```{r}
+LCC_go_innate_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_go_innate) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_go_innate_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10", limits = c(1, 1050)) +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of GO Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_go_innate = names(temp[temp != 1])
+nonLCC_go_innate_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_go_innate) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_go_innate_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of GO Proteins Not in LCC") +
+  theme_minimal()
+```
+
+```{r}
+# GO adaptive LCC
+ppi_go_adapt = go_adapt[go_adapt %in% V(ppi_g)$name]
+go_adapt_graph <- induced_subgraph(ppi_g, ppi_go_adapt)
+temp <- components(go_adapt_graph)$membership
+inLCC_go_adapt = names(temp[temp == 1])
+
+LCC_go_adapt = LCC_signif(G = ppi_g, targets = inLCC_go_adapt, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_go_adapt$size, LCC_go_adapt$distribution)
+hist(LCC_go_adapt$distribution, main = "GO Adaptive Immunity Empirical LCC Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_go_adapt$size, col = "red")
+```
+```{r}
+LCC_go_adapt_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_go_adapt) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_go_adapt_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10", limits = c(1, 1050)) +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of GO Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_go_adapt = names(temp[temp != 1])
+nonLCC_go_adapt_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_go_adapt) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_go_adapt_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of GO Proteins Not in LCC") +
+  theme_minimal()
+```
+
+```{r}
+# GO other LCC
+ppi_go_other = go_other[go_other %in% V(ppi_g)$name]
+go_other_graph <- induced_subgraph(ppi_g, ppi_go_other)
+temp <- components(go_other_graph)$membership
+inLCC_go_other = names(temp[temp == 1])
+
+LCC_go_other = LCC_signif(G = ppi_g, targets = inLCC_go_other, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_go_other$size, LCC_go_other$distribution)
+hist(LCC_go_other$distribution, main = "GO Other Immunity Empirical LCC Distribution", 
+     xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+abline(v = LCC_go_other$size, col = "red")
+```
+```{r}
+LCC_go_other_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_go_other) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_go_other_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10", limits = c(1, 1050)) +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of GO Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_go_other = names(temp[temp != 1])
+nonLCC_go_other_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_go_other) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_go_other_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of GO Proteins Not in LCC") +
+  theme_minimal()
+```
+
+
+```{r}
+# InnateDB LCC
+#   Same as before
+```
+
+```{r}
+# KEGG Innate LCC
+ppi_kegg_innate = kegg_innate_only[kegg_innate_only %in% V(ppi_g)$name]
+kegg_innate_graph <- induced_subgraph(ppi_g, ppi_kegg_innate)
+temp <- components(kegg_innate_graph)$membership
+inLCC_kegg_innate = names(temp[temp == 1])
+
+LCC_kegg_innate = LCC_signif(G = ppi_g, targets = inLCC_kegg_innate, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_kegg_innate$size, LCC_kegg_innate$distribution)
+hist(LCC_kegg_innate$distribution, main = "KEGG Innate Immunity Empirical LCC Distribution", 
+     xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+abline(v = LCC_kegg_innate$size, col = "red")
+```
+```{r}
+LCC_kegg_innate_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_kegg_innate) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_kegg_innate_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10", limits = c(1, 1050)) +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of KEGG Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_kegg_innate = names(temp[temp != 1])
+nonLCC_kegg_innate_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_kegg_innate) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_kegg_innate_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of KEGG Proteins Not in LCC") +
+  theme_minimal()
+```
+
+```{r}
+# KEGG Adaptive LCC
+ppi_kegg_adapt = kegg_adapt_only[kegg_adapt_only %in% V(ppi_g)$name]
+kegg_adapt_graph <- induced_subgraph(ppi_g, ppi_kegg_adapt)
+temp <- components(kegg_adapt_graph)$membership
+inLCC_kegg_adapt = names(temp[temp == 1])
+
+LCC_kegg_adapt = LCC_signif(G = ppi_g, targets = inLCC_kegg_adapt, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_kegg_adapt$size, LCC_kegg_adapt$distribution)
+hist(LCC_kegg_adapt$distribution, main = "KEGG Adaptive Immunity Empirical LCC Distribution", 
+     xlim = c(min(lim - 50), max(lim + 50)), col = 'gray75', ylab = "", breaks = 20)
+abline(v = LCC_kegg_adapt$size, col = "red")
+```
+```{r}
+LCC_kegg_adapt_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_kegg_adapt) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_kegg_adapt_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10", limits = c(1, 1050)) +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of KEGG Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_kegg_adapt = names(temp[temp != 1])
+nonLCC_kegg_adapt_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_kegg_adapt) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_kegg_adapt_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of KEGG Proteins Not in LCC") +
+  theme_minimal()
+```
+
+```{r}
+# KEGG Both LCC
+ppi_kegg_both = kegg_both[kegg_both %in% V(ppi_g)$name]
+kegg_both_graph <- induced_subgraph(ppi_g, ppi_kegg_both)
+temp <- components(kegg_both_graph)$membership
+inLCC_kegg_both = names(temp[temp == 1])
+
+LCC_kegg_both = LCC_signif(G = ppi_g, targets = inLCC_kegg_both, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_kegg_both$size, LCC_kegg_both$distribution)
+hist(LCC_kegg_both$distribution, main = "KEGG Both Adaptive & Innate Immunity Empirical LCC Distribution", 
+     xlim = c(min(lim - 50), max(lim + 50)), col = 'gray75', ylab = "", breaks = 20)
+abline(v = LCC_kegg_both$size, col = "red")
+```
+```{r}
+LCC_kegg_both_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_kegg_both) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_kegg_both_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10", limits = c(1, 1050)) +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of KEGG Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_kegg_both = names(temp[temp != 1])
+nonLCC_kegg_both_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_kegg_both) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_kegg_both_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of KEGG Proteins Not in LCC") +
+  theme_minimal()
+```
+
+```{r}
+# Reactome Innate LCC
+ppi_reactome_innate = reactome_innate_only[reactome_innate_only %in% V(ppi_g)$name]
+reactome_innate_graph <- induced_subgraph(ppi_g, ppi_reactome_innate)
+temp <- components(reactome_innate_graph)$membership
+inLCC_reactome_innate = names(temp[temp == 1])
+
+LCC_reactome_innate = LCC_signif(G = ppi_g, targets = inLCC_reactome_innate, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_reactome_innate$size, LCC_reactome_innate$distribution)
+hist(LCC_reactome_innate$distribution, main = "ReactomeDB Innate Immunity Empirical LCC Distribution", 
+     xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+abline(v = LCC_reactome_innate$size, col = "red")
+```
+```{r}
+LCC_reactome_innate_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_reactome_innate) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_reactome_innate_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of ReactomeDB Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_reactome_innate = names(temp[temp != 1])
+nonLCC_reactome_innate_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_reactome_innate) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_reactome_innate_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of ReactomeDB Proteins Not in LCC") +
+  theme_minimal()
+```
+
+```{r}
+# Reactome Adaptive LCC
+ppi_reactome_adapt = reactome_adapt_only[reactome_adapt_only %in% V(ppi_g)$name]
+reactome_adapt_graph <- induced_subgraph(ppi_g, ppi_reactome_adapt)
+temp <- components(reactome_adapt_graph)$membership
+inLCC_reactome_adapt = names(temp[temp == 1])
+
+LCC_reactome_adapt = LCC_signif(G = ppi_g, targets = inLCC_reactome_adapt, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_reactome_adapt$size, LCC_reactome_adapt$distribution)
+hist(LCC_reactome_adapt$distribution, main = "ReactomeDB Adaptive Immunity Empirical LCC Distribution", 
+     xlim = c(min(lim - 50), max(lim + 50)), col = 'gray75', ylab = "", breaks = 20)
+abline(v = LCC_reactome_adapt$size, col = "red")
+```
+```{r}
+LCC_reactome_adapt_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_reactome_adapt) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_reactome_adapt_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of ReactomeDB Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_reactome_adapt = names(temp[temp != 1])
+nonLCC_reactome_adapt_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_reactome_adapt) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_reactome_adapt_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of ReactomeDB Proteins Not in LCC") +
+  theme_minimal()
+```
+
+```{r}
+# Reactome Both LCC
+ppi_reactome_both = reactome_both[reactome_both %in% V(ppi_g)$name]
+reactome_both_graph <- induced_subgraph(ppi_g, ppi_reactome_both)
+temp <- components(reactome_both_graph)$membership
+inLCC_reactome_both = names(temp[temp == 1])
+
+LCC_reactome_both = LCC_signif(G = ppi_g, targets = inLCC_reactome_both, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_reactome_both$size, LCC_reactome_both$distribution)
+hist(LCC_reactome_both$distribution, main = "ReactomeDB Both Immunity Empirical LCC Distribution", 
+     xlim = c(min(lim - 50), max(lim + 50)), col = 'gray75', ylab = "", breaks = 20)
+abline(v = LCC_reactome_both$size, col = "red")
+```
+```{r}
+LCC_reactome_both_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_reactome_both) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = LCC_reactome_both_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of ReactomeDB Proteins in LCC") +
+  theme_minimal()
+
+nonLCC_reactome_both = names(temp[temp != 1])
+nonLCC_reactome_both_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_reactome_both) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+## Let's try my log binning function
+testing_df = logbin_distribution(samples = nonLCC_reactome_both_df$Degree, B = 20)
+row_sub = apply(testing_df, 1, function(row) all(row != 0))
+testing_df = testing_df[row_sub,]
+
+ggplot(testing_df) +
+  aes(x = x, y = p) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "pk", title = "Degrees of ReactomeDB Proteins Not in LCC") +
+  theme_minimal()
+```
+
+
+
+
+# Network Separation S_ab of these Immunity Components and databases
+```{r}
+# 
+SAB = separation(G = ppi_g, 
+                 ST = Data_db_all_subsets)
+#SAB
+Sep = SAB$Sab %>% as.matrix()
+Sep[lower.tri(Sep)] = t(Sep)[lower.tri(Sep)]
+S = Sep %>% as.matrix()
+superheat(S, heat.pal = c("mediumblue", "white", "red"), X.text = round(S,3), heat.pal.values = c(0, 0.55, 1),
+          X.text.col = "white", X.text.size = 3, bottom.label.text.angle = 90, bottom.label.text.size = 2.5)
+
+sep_g = graph_from_adjacency_matrix(S, mode = "undirected", weighted = TRUE)
+sep_g = delete.edges(sep_g, E(sep_g)[E(sep_g)$weight == 0])
+
+E(sep_g)$width = abs(E(sep_g)$weight)
+V(sep_g)$size = strength(sep_g)
+
+V(sep_g)$color = "lightblue"
+V(sep_g)$label.color = "lightblue"
+E(sep_g)$color = "grey66"
+
+#coord = layout_with_drl(sep_g, weights = E(sep_g)$weight^3)
+#plot(simplify(sep_g), layout = coord)
+
+require(ggraph)
+ggraph(sep_g, 'stress') +
+  geom_edge_hive(aes(width = abs(weight), alpha = abs(weight))) +
+  geom_node_point(aes(size = abs(size)), colour = "lightblue")+
+  geom_node_text(aes(label = name),
+                size = 3) +
+  scale_edge_width(range = c(0.2, 0.4)) +
+  theme_void()
+```
+
+```{r}
+g = graph_from_adjacency_matrix(S, mode = "undirected", weighted = TRUE)
+g = delete.edges(g, E(g)[E(g)$weight >= 0])
+
+E(g)$width = E(g)$weight
+V(g)$size = strength(g)
+
+innate_comp = c("GO.innate", "KEGG.innate", "ReactomeDB.innate", "InnateDB") # make this red
+adapt_comp = c("GO.adapt", "KEGG.adapt", "ReactomeDB.adapt") # make this blue
+both_comp = c("KEGG.both", "ReactomeDB.both") # make this purple
+other_comp = c("GO.other") # make this green
+
+V(g)$type = ifelse(V(g)$name %in% innate_comp, "Innate Module", 
+                   ifelse(V(g)$name %in% adapt_comp, "Adaptive Module",
+                          ifelse(V(g)$name %in% both_comp, "Both Innate and Adapt.", "Other Immunity")))
+V(g)$label.color = "#264660"
+E(g)$color = "grey66"
+
+#coord = layout_with_drl(g, weights = E(g)$weight^3)
+#plot(simplify(g), layout = coord)
+
+require(ggraph)
+ggraph(g, 'stress') +
+  geom_edge_hive(aes(width = abs(weight), alpha = abs(weight))) +
+  geom_node_point(aes(size = abs(size), color = type)) +
+  geom_node_text(aes(label = name, size = abs(size),)
+                 ) +
+  scale_edge_width(range = c(0.2, 1)) +
+  theme_void()
+```
+
+
+
+
+
+
+
+
+
+# Whole Component LCCs
+
+```{r}
+# Remove ReactomeDB
+
+immune_data <- immune_data %>% 
+  select(!c(ReactomePathwayInnate, ReactomePathIDInnate, ReactomeDB, isInnateReactome, ReactomePathwayAdaptive, ReactomePathIDAdaptive, isAdaptiveReactome))
+```
+
+```{r}
+# Do they all make an LCC?
+
+all_immune_genes <- unique(immune_data$Symbol)
+all_immune_genes <- all_immune_genes[all_immune_genes %in% V(ppi_g)$name]
+
+LCC_all<- LCC_signif(G = ppi_g, targets = all_immune_genes, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_all$size, LCC_all$distribution)
+hist(LCC_all$distribution, main = "Empirical LCC Distribution of All Immunity Genes", 
+     xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_all$size, col = "red")
+
+
+```
+```{r}
+# Do innate make an LCC?
+
+innate_immune <- immune_data %>%
+  select(Symbol, isInnateGO, isInnateKEGG, isInnateInnateDB) %>%
+  filter(isInnateGO == 1 | isInnateKEGG == 1 | isInnateInnateDB == 1)
+
+all_innate_genes <- unique(innate_immune$Symbol)
+all_innate_genes <- all_innate_genes[all_innate_genes %in% V(ppi_g)$name]
+
+LCC_innate<- LCC_signif(G = ppi_g, targets = all_innate_genes, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_innate$size, LCC_innate$distribution)
+hist(LCC_innate$distribution, main = "Empirical LCC Distribution of All Innate Immunity Genes", 
+     xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_innate$size, col = "red")
+
+```
+
+```{r}
+# Do adaptive make an LCC?
+
+adaptive_immune <- immune_data %>%
+  select(Symbol, isAdaptiveGO, isAdaptiveKEGG) %>%
+  filter(isAdaptiveGO == 1 | isAdaptiveKEGG == 1)
+
+all_adapt_genes <- unique(adaptive_immune$Symbol)
+all_adapt_genes <- all_adapt_genes[all_adapt_genes %in% V(ppi_g)$name]
+
+LCC_adapt<- LCC_signif(G = ppi_g, targets = all_adapt_genes, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_adapt$size, LCC_adapt$distribution)
+hist(LCC_adapt$distribution, main = "Empirical LCC Distribution of All Adaptive Immunity Genes", 
+     xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_adapt$size, col = "red")
+
+```
+
+```{r}
+# Do other make an LCC
+
+other_immune <- immune_data %>%
+  select(Symbol, isOtherGO) %>%
+  filter(isOtherGO == 1)
+
+all_other_genes <- unique(other_immune$Symbol)
+all_other_genes <- all_other_genes[all_other_genes %in% V(ppi_g)$name]
+
+LCC_other<- LCC_signif(G = ppi_g, targets = all_other_genes, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_other$size, LCC_other$distribution)
+hist(LCC_other$distribution, main = "Empirical LCC Distribution of GO Other Immunity Genes", 
+     xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_other$size, col = "red")
+
+```
+
+
+
+
+
+
+
+
+
+
+

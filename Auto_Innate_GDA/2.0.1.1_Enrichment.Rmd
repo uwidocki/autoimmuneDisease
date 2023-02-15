@@ -1,0 +1,235 @@
+---
+title: "2.0.1.1_Enrichment"
+author: "Ursula Widocki"
+date: "2022-10-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+library(igraph)
+library(magrittr)
+library(ggraph)
+library(superheat)
+library(NetSci)
+library(eulerr)
+library(patchwork)
+library(Cairo)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+```
+
+```{r}
+# Read in PPI data
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+# GDA
+GDA_data = fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new2.tsv') # has isAutoimmune col
+GDA_auto <- GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+
+# Read in immunity genes (just in case you want to incorporate them)
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", 
+                        sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+```
+
+# Enrichment Analysis
+What are the immune pathways these diseases have in common? Are they disease-specific or involved in generally immunity?
+
+```{r}
+# Make bipartite network of autoimmune diseases
+
+g = graph_from_edgelist(as.matrix(GDA_auto), directed = F)
+
+# make disease projection of the graph
+V(g)$type <- bipartite_mapping(g)$type
+E(g)$weight <- 1
+#V(g)$degree = degree(g)
+
+# Get the individual projections in the autoimmune disease network
+g_dis = bipartite_projection(g, multiplicity = T, which = "false") # disease projection
+g_gene = bipartite_projection(g, multiplicity = T, which = "true") # gene projection
+
+temp_A <- get.incidence(g, types = V(g)$type, names = T) # dis by genes
+
+temp_A <- as.data.frame(temp_A)
+
+temp_A <- temp_A[,which(colSums(temp_A) >= 2)]
+
+```
+
+# using gProfiler
+```{r}
+library(gprofiler2) # gene enrichment
+
+# diseases of the large Jacc cluster
+query_genes = colnames(temp_A)
+background_genes = unique(immune_data$Symbol) # all immunity genes
+sources = c("GO:BP", "GO:MF", "GO:CC", "KEGG")
+
+# domain_scope = "custom" or "custom_annotated"
+# custom_bg = # parameter for custom background set
+enrich_inter <- gost(query = query_genes, 
+                organism = "hsapiens", ordered_query = FALSE, 
+                multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                measure_underrepresentation = FALSE, evcodes = FALSE, 
+                user_threshold = 0.05, correction_method = "fdr", 
+                domain_scope = "custom", custom_bg = background_genes, 
+                numeric_ns = "", sources = sources, as_short_link = FALSE)
+
+enrich_result_df <- enrich_inter$result
+
+# save enrichment table
+fwrite(enrich_result_df, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/Enrichment_gprofiler.tsv", row.names = F, col.names = T, sep = "\t")
+
+```
+
+
+# using GO
+```{r}
+GO = function(ID_type = "symbol", 
+              bg, 
+              g, 
+              ONTO = 'BP'){
+  require(topGO)
+  require(magrittr)
+  require(dplyr)
+  if(ID_type %ni% c("symbol", "entrez", "ensembl")){
+    stop('Please, use one of the following ID_type for your gene: "symbol", "entrez", "ensembl"')
+  }
+  if(ONTO %ni% c("BP", "MF", "CC")){
+    stop('Please, use one of the following ontology: "BP", "MF", "CC"')
+  }
+  geneID2GO <- annFUN.org(ONTO, 
+                          mapping = "org.Hs.eg.db",
+                          ID = ID_type) %>% 
+    inverseList()
+  
+  Background <- data.frame(V1 = bg)
+  GenesOI <- data.frame(V1 = g)
+  geneList <- factor(as.integer(Background$V1 %in% GenesOI$V1))
+  names(geneList) <- Background$V1
+  
+  GOdata <- new("topGOdata",
+                ontology = ONTO,
+                allGenes = geneList,
+                geneSel = GenesOI,
+                annot = annFUN.gene2GO,  # the new annotation function
+                gene2GO = geneID2GO)    ## the gene ID to GOs dataset
+  test.statk <- new("classicScore", testStatistic = GOKSTest, name = "KS test")
+  test.statf <- new("classicCount", testStatistic = GOFisherTest, name = "Fisher test")
+  test.weight<- new("weightCount", testStatistic = GOFisherTest, name = "Fisher test")
+  resultFisher <- getSigGroups(GOdata, test.statf)
+  resultKS <- getSigGroups(GOdata, test.statk)
+  pvalFis <- score(resultFisher)
+  pvalKS <- score(resultKS)
+  resultWeight <- getSigGroups(GOdata, test.weight)
+  pvalWeight <- score(resultWeight, whichGO = names(pvalFis))
+  cor(pvalFis, pvalWeight)
+  geneData(resultWeight)
+  allRes_BP <- GenTable(GOdata, 
+                        classic = resultFisher, 
+                        KS = resultKS, 
+                        weight = resultWeight, 
+                        orderBy = "weight", 
+                        ranksOf = "classic", 
+                        topNodes = 500, 
+                        numChar = 400)
+  
+  
+  goID <- allRes_BP[, "GO.ID"]
+  ID2GO = list()
+  for(i in 1:length(geneID2GO)){
+    ID2GO[[i]] = data.frame(gene = names(geneID2GO)[i],
+                            GOs = geneID2GO[[i]])
+  }
+  ID2GO %<>% bind_rows()
+  
+  ID2GO_sign = ID2GO %>% 
+    filter(GOs %in% goID)
+  
+  allRes_BP_f = subset(allRes_BP, allRes_BP$weight < 0.01)
+  return(list(Res = allRes_BP, 
+              Sign = allRes_BP_f, 
+              Gene2GO = ID2GO_sign))
+}
+```
+
+
+
+```{r}
+library(topGO)
+library(org.Hs.eg.db)
+
+query_genes = colnames(temp_A)
+background_genes = unique(immune_data$Symbol) # all immunity genes
+GO_enrichment = GO(ID_type = "symbol", 
+   g = query_genes, 
+   ONTO = "BP", 
+   bg = background_genes)
+
+
+fwrite(GO_enrichment$Sign, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/Enrichment_topGO_significant.tsv", row.names = F, col.names = T, sep = "\t")
+
+```
+
+# filter down the results a bit
+```{r}
+GO_filtered <- GO_enrichment$Sign %>%
+  filter(KS >= 0.9) %>%
+  filter(classic <= 0.001)
+
+fwrite(GO_filtered, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/Enrichment_topGO_significant_filt_KS_0.9_Fisher_0.001.tsv", row.names = F, col.names = T, sep = "\t")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

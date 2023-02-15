@@ -1,0 +1,726 @@
+---
+title: "2.4_Disease_Module_Sab_examination"
+author: "Ursula Widocki"
+date: "2022-08-12"
+output: html_document
+---
+
+-> compute Sabs between autoimmune diseases in each tissue using GTEx DE genes
+-> compare tissue Sab with Sab of diseases in PPI
+-> evaluate disease module comorbidities in tissue
+      if both diseases have a module in a tissue
+      like a Jaccard similarity with tissue modules
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(igraph)
+library(ggraph)
+library(NetSci)
+library(magrittr)
+library(stringr)
+library(ggraph)
+library(Cairo)
+
+library(rdrop2)
+drop_auth()
+
+`%ni%` <- Negate(`%in%`)
+```
+
+```{r}
+# Read in PPI
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = igraph::degree(ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+# autoimmune disease GDA data
+GDA_data = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new2.tsv") # has isAutoimmune col
+# select disease that have some form of Strong or Weak evidence and have more than 5 disease genes
+GDA_auto = GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name) %>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+
+# Tissue data
+# try this with just the hpa data
+tissue_hpa_data = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/rna_tissue_hpa.tsv")
+tissue_dat <- tissue_hpa_data %>% dplyr::select(-Gene) %>% filter(`Gene name` %in% V(ppi_g)$name)
+# if there is a duplicate, take the sum of their collective expression values
+summary_hpa = tissue_dat %>% 
+  group_by(Tissue, `Gene name`) %>%
+  summarise(sum = sum(pTPM)) %>% 
+  mutate(Q50 = quantile(sum, 0.50))
+
+# Disease-Tissue LCCs
+dis_tiss_LCC_df <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Disease_Tissue_LCCs_HPA_newData2_Q50.tsv")
+dis_tiss_LCC_df <- dis_tiss_LCC_df %>% filter(padj < 0.05)
+
+# SAB from whole PPI
+sab_whole_ppi <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Autoimmune_jacc_sep2.tsv")
+sab_whole_ppi %<>% dplyr::rename(Sab_ppi = Sab) %>% 
+  dplyr::rename(p_Sab_ppi = p_Sab) %>% 
+  dplyr::rename(padj_Sab_ppi = padj_Sab) %>% 
+  dplyr::select(-Jacc) %>% 
+  dplyr::select(-p_Jacc)
+
+# Sab of diseases in tissues
+sab_tissue <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Disease_Tissue_Sab2.tsv")
+
+```
+
+
+# compute Sabs between autoimmune diseases in each tissue using HPA
+
+```{r}
+# reorder disease names 
+
+n1 = apply(sab_tissue[, 1:2], 1, min)
+n2 = apply(sab_tissue[, 1:2], 1, max)
+sab_tissue$dis1 <- n1
+sab_tissue$dis2 <- n2
+
+
+n1 = apply(sab_whole_ppi[, 1:2], 1, min)
+n2 = apply(sab_whole_ppi[, 1:2], 1, max)
+sab_whole_ppi$dis1 <- n1
+sab_whole_ppi$dis2 <- n2
+
+# merge Sab data to plot distributions
+
+all_sab <- left_join(sab_tissue, sab_whole_ppi)
+
+```
+
+```{r}
+# to plot the Sab individually for all disease pairs
+all_sab$dis_pair <- str_c(all_sab$dis1,"-", all_sab$dis2)
+disease_pairs <- all_sab %>% pull(dis_pair) %>% unique()
+
+for(pair in disease_pairs){
+  print(pair)
+  
+  temp <- all_sab %>%
+    filter(dis_pair == pair) 
+  #filter for significant Sab_ppi
+  
+  plot <- ggplot(temp) +
+    aes(x = Sab) +
+    geom_histogram(bins = 30L, fill = "#112446") +
+    geom_vline(xintercept = unique(temp$Sab_ppi), col = "red") +
+    labs(title = pair, x = "Tissue Sab") +
+    theme_minimal()
+  
+  print(plot)
+  
+}
+
+```
+
+# plot tissue Sab distributions with Sab from whole ppi
+```{r}
+# make distributions into a grid
+p <- ggplot(all_sab) +
+  aes(x = Sab) +
+  geom_histogram(bins = 30L, fill = "#112446") +
+  theme_minimal() +
+  facet_grid(vars(dis1), vars(dis2))
+
+p + geom_vline(aes(xintercept = Sab_ppi), data = all_sab, col = "red")
+```
+
+
+
+
+
+
+
+
+## Tissue Comorbidity Scores
+
+# make a graph where the edge weight is the number of tissues the two diseases have significant Sab
+```{r}
+diseases <- unique(dis_tiss_LCC_df$Disease_Name)
+col_labels <- c("Disease1", "Disease2", "NumTissuesDis1", "NumTissuesDis2", "TissueComorbidity")
+dis_tis_comorb_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(dis_tis_comorb_df) <- col_labels
+
+k = 0
+dis_tis_comorb_df = list()
+for(i in 1:(length(diseases)-1)){
+  # get tissues where disease has a module
+  dis1 = diseases[i]
+  dis1_df <- dis_tiss_LCC_df %>%
+    filter(Disease_Name == dis1) %>%
+    filter(padj < 0.05) %>%
+    select(Disease_Name, Tissue)
+  
+  for(j in (i+1):(length(diseases))){
+    # get tissues where disease has a module
+    k=k+1
+    dis2 = diseases[j]
+    dis2_df <- dis_tiss_LCC_df %>%
+      filter(Disease_Name == dis2) %>%
+      filter(padj < 0.05) %>%
+      select(Disease_Name, Tissue)
+    
+    # calc tissue comorbidity score
+    tiss_dis1 <- unique(dis1_df$Tissue) # num tissues dis1
+    tiss_dis2 <- unique(dis2_df$Tissue) # num tissues dis2
+    
+    inter <- intersect(tiss_dis1, tiss_dis2) # num tissues of both diseases
+    total_tiss <- unique(union(tiss_dis1, tiss_dis2)) # total tissues between them
+
+    com_score = length(inter) / length(total_tiss) # fraction of common and total tissues
+    
+    dis_tis_comorb_df[[k]] <- data.frame(Disease1 = dis1, Disease2 = dis2, NumTissueDis1 = length(tiss_dis1), NumTissueDis2 = length(tiss_dis2), TissueComorbidity = com_score) # save this as a df, not vect
+    
+    
+  }
+}
+dis_tis_comorb_df %<>% bind_rows()
+  
+```
+
+```{r}
+df_for_graph <- dis_tis_comorb_df %>%
+  select(Disease1, Disease2, TissueComorbidity)
+
+tis_comb_g <- graph_from_data_frame(dis_tis_comorb_df, directed = F)
+V(tis_comb_g)$degree <- degree(tis_comb_g)
+
+#E(tis_comb_g)$TissueComorbidity <- as.numeric(E(tis_comb_g)$TissueComorbidity)
+
+#ggraph(tis_comb_g , 'fr') +
+#  geom_edge_hive(aes(#width = TissueComorbidity,
+#                    alpha = TissueComorbidity)) +
+#  geom_node_point(aes(size = degree)) +
+#  geom_node_text(aes(label = name))+
+#  theme_void()
+
+
+# I want to plot it such that the higher the comorbidity score, the closer the nodes are together
+set.seed(1255)
+coord <- tis_comb_g %>%
+  layout_with_drl(., weights = E(.)$TissueComorbidity * 7) %>%
+  igraph::norm_coords()
+
+plot(x = tis_comb_g,
+     vertex.frame.color = NA,
+     vertex.label.cex = V(tis_comb_g)$degree / 12,
+     vertex.label.color = "black",
+     vertex.label.degree = -pi/2, # how to move labels?
+     vertex.label.dist = 0.1,
+     vertex.label.family = "Helvetica",
+     vertex.label.font = 2,
+     vertex.size = 10,
+     vertex.label.y = 3,
+     
+     edge.width = (E(tis_comb_g)$TissueComorbidity+0.1) * 2,
+     edge.curved = 0.3,
+     
+     layout = coord
+     )
+
+```
+
+
+
+
+
+# Some unexpected disease Sab tissue results
+
+```{r}
+# We want to examine Sabs where ppi < tissue
+
+temp <- all_sab %>%
+  filter(Sab_ppi < Sab) %>%
+  filter(Sab_ppi < 0) %>%
+  filter(Sab > 0)
+
+```
+
+# Examine UC and Glomerulonephritis
+```{r}
+# Plot disease modules on top of each other with each node being a pie chart of which disease they belong to
+
+# plot the UC disease module in the ppi
+uc_genes <- GDA_auto %>% filter(NewName == "colitis ulcerative") %>% 
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% pull(HGNC_Symbol)
+
+g_uc <- induced_subgraph(ppi_g, uc_genes) #%>% extract_LCC()
+
+# plot the glomerulonephritis disease module in the ppi
+glom_genes <- GDA_auto %>% filter(NewName == "glomerulonephritis") %>% 
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% pull(HGNC_Symbol)
+
+g_glom <- induced_subgraph(ppi_g, glom_genes) #%>% extract_LCC()
+
+# plotting both disease modules
+g_uc_glom <- induced_subgraph(ppi_g, c(glom_genes, uc_genes)) #%>% extract_LCC()
+
+# add disease names as  feature
+V(g_uc_glom)$UC <- ifelse(V(g_uc_glom)$name %in% uc_genes, 1, 0)
+V(g_uc_glom)$Glom <- ifelse(V(g_uc_glom)$name %in% glom_genes, 1, 0)
+
+vs = V(g_uc_glom)
+values <- lapply(1:length(vs), function(x) c(V(g_uc_glom)$UC[x], V(g_uc_glom)$Glom[x]))
+
+# use betweenness as an edge attribute
+E(g_uc_glom)$weight <- edge_betweenness(g_uc_glom) %>% CoDiNA::normalize()
+
+
+coord <- g_uc_glom %>%
+  layout_with_fr(., weights = E(.)$weight *2.5) %>%
+  igraph::norm_coords()
+
+CairoPDF(paste0("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/UC_Glom_in_tissues/in_PPI.pdf"))
+plot(g_uc_glom,
+     vertex.shape = "pie",
+     vertex.pie=values,
+     vertex.pie.color = list(c("#8E3179", "#87C1FF")),
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.frame.color = NA,
+     
+     edge.curved = 0.1,
+     edge.width = E(g_uc_glom)$weight,
+     
+     layout = coord)
+title("UC and Glom in PPI")
+dev.off()
+```
+
+
+
+# Graph tissue data
+```{r}
+uc_glom_tissues <- all_sab %>%
+  filter(dis1 == "colitis ulcerative") %>%
+  filter(dis2 == "glomerulonephritis") %>%
+  pull(tissue)
+
+# for loop over tissues
+for(tiss in uc_glom_tissues){
+  # get tissue genes
+  genes_tiss <- tissue_data %>% filter(term == tiss) %>% pull(HGNC_Symbol)
+  
+  V(g_uc_glom)$UC_tiss <- V(g_uc_glom)$UC
+  V(g_uc_glom)$Glom_tiss <- V(g_uc_glom)$Glom
+  V(g_uc_glom)$tiss <- ifelse(V(g_uc_glom)$name %in% genes_tiss, 0, 1) # if in tiss, colorful pie
+  for(gene in V(g_uc_glom)){
+    if(V(g_uc_glom)$tiss[gene] == 1){
+      V(g_uc_glom)$UC_tiss[gene] = 0
+      V(g_uc_glom)$Glom_tiss[gene] = 0
+    }
+  }
+  
+  values <- lapply(1:length(vs), function(x) c(V(g_uc_glom)$UC_tiss[x], V(g_uc_glom)$Glom_tiss[x], V(g_uc_glom)$tiss[x]))
+  
+  # remove links between two genes that are not in the tissue
+  genes_not_tissue <- V(g_uc_glom)$name[V(g_uc_glom)$name %ni% genes_tiss]
+  g_uc_glom<- delete_edges(g_uc_glom, E(g_uc_glom) [.inc(genes_not_tissue)])
+
+  # make sure to save figures in its own folder
+  CairoPDF(paste0("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/UC_Glom_in_tissues/in_",tiss,".pdf"))
+  plot(g_uc_glom,
+     vertex.shape = "pie",
+     vertex.pie=values,
+     vertex.pie.color = list(c("#8E3179", "#87C1FF", "#D3D3D3")),
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.frame.color = NA,
+     
+     edge.curved = 0.1,
+     edge.width = E(g_uc_glom)$weight,
+     
+     layout = coord)
+  title(paste0("UC and Glom in ", tiss))
+  dev.off()
+}
+```
+
+
+# RA and Glomerulonephritis
+```{r}
+# plot the RA disease module in the ppi
+ra_genes <- GDA_auto %>% filter(NewName == "arthritis rheumatoid") %>% 
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% pull(HGNC_Symbol)
+g_ra <- induced_subgraph(ppi_g, ra_genes) #%>% extract_LCC()
+
+# plot the glomerulonephritis disease module in the ppi
+glom_genes <- GDA_auto %>% filter(NewName == "glomerulonephritis") %>% 
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% pull(HGNC_Symbol)
+g_glom <- induced_subgraph(ppi_g, glom_genes) #%>% extract_LCC()
+
+# plotting both disease modules
+g_ra_glom <- induced_subgraph(ppi_g, c(glom_genes, ra_genes)) #%>% extract_LCC()
+
+# add disease names as  feature
+V(g_ra_glom)$RA <- ifelse(V(g_ra_glom)$name %in% ra_genes, 1, 0)
+V(g_ra_glom)$Glom <- ifelse(V(g_ra_glom)$name %in% glom_genes, 1, 0)
+
+vs = V(g_ra_glom)
+values <- lapply(1:length(vs), function(x) c(V(g_ra_glom)$RA[x], V(g_ra_glom)$Glom[x]))
+
+# use betweenness as an edge attribute
+E(g_ra_glom)$weight <- edge_betweenness(g_ra_glom) %>% CoDiNA::normalize()
+
+
+coord <- g_ra_glom %>%
+  layout_with_fr(., weights = E(.)$weight *2.5) %>%
+  igraph::norm_coords()
+
+CairoPDF(paste0("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/RA_Glom_in_tissues/in_PPI.pdf"))
+plot(g_ra_glom,
+     vertex.shape = "pie",
+     vertex.pie=values,
+     vertex.pie.color = list(c("#8E3179", "#87C1FF")),
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.frame.color = NA,
+     
+     edge.curved = 0.1,
+     edge.width = E(g_ra_glom)$weight,
+     
+     layout = coord)
+title("RA and Glom in PPI")
+dev.off()
+```
+
+```{r}
+ra_glom_tissues <- all_sab %>%
+  filter(dis1 == "arthritis rheumatoid") %>%
+  filter(dis2 == "glomerulonephritis") %>%
+  pull(tissue)
+
+# for loop over tissues
+for(tiss in ra_glom_tissues){
+  # get tissue genes
+  genes_tiss <- tissue_data %>% filter(term == tiss) %>% pull(HGNC_Symbol)
+  
+  V(g_ra_glom)$RA_tiss <- V(g_ra_glom)$RA
+  V(g_ra_glom)$Glom_tiss <- V(g_ra_glom)$Glom
+  V(g_ra_glom)$tiss <- ifelse(V(g_ra_glom)$name %in% genes_tiss, 0, 1) # if in tiss, colorful pie
+  for(gene in V(g_ra_glom)){
+    if(V(g_ra_glom)$tiss[gene] == 1){
+      V(g_ra_glom)$RA_tiss[gene] = 0
+      V(g_ra_glom)$Glom_tiss[gene] = 0
+    }
+  }
+  
+  values <- lapply(1:length(vs), function(x) c(V(g_ra_glom)$RA_tiss[x], V(g_ra_glom)$Glom_tiss[x], V(g_ra_glom)$tiss[x]))
+  
+  genes_not_tissue <- V(g_ra_glom)$name[V(g_ra_glom)$name %ni% genes_tiss]
+  g_ra_glom<- delete_edges(g_ra_glom, E(g_ra_glom) [.inc(genes_not_tissue)])
+
+  # make sure to save figures in its own folder
+  CairoPDF(paste0("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/RA_Glom_in_tissues/in_",tiss,".pdf"))
+  plot(g_ra_glom,
+     vertex.shape = "pie",
+     vertex.pie=values,
+     vertex.pie.color = list(c("#8E3179", "#87C1FF", "#D3D3D3")),
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.frame.color = NA,
+     
+     edge.curved = 0.1,
+     
+     layout = coord)
+  title(paste0("RA and Glom in ", tiss))
+  dev.off()
+}
+
+```
+
+
+
+
+
+# Anemia hemolytic and uveitis
+```{r}
+# plot the anemia disease module in the ppi
+anemia_genes <- GDA_auto %>% filter(NewName == "anemia hemolytic") %>% 
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% pull(HGNC_Symbol)
+g_anemia <- induced_subgraph(ppi_g, anemia_genes) #%>% extract_LCC()
+
+# plot the uveitis disease module in the ppi
+uve_genes <- GDA_auto %>% filter(NewName == "uveitis") %>% 
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% pull(HGNC_Symbol)
+g_uve <- induced_subgraph(ppi_g, uve_genes) #%>% extract_LCC()
+
+# plotting both disease modules
+g_anemia_uve <- induced_subgraph(ppi_g, c(anemia_genes, uve_genes)) #%>% extract_LCC()
+
+# add disease names as  feature
+V(g_anemia_uve)$Anemia <- ifelse(V(g_anemia_uve)$name %in% anemia_genes, 1, 0)
+V(g_anemia_uve)$Uve <- ifelse(V(g_anemia_uve)$name %in% uve_genes, 1, 0)
+
+vs = V(g_anemia_uve)
+values <- lapply(1:length(vs), function(x) c(V(g_anemia_uve)$Anemia[x], V(g_anemia_uve)$Uve[x]))
+
+# use betweenness as an edge attribute
+E(g_anemia_uve)$weight <- edge_betweenness(g_anemia_uve) %>% CoDiNA::normalize()
+
+
+coord <- g_anemia_uve %>%
+  layout_with_fr(., weights = E(.)$weight *2.5) %>%
+  igraph::norm_coords()
+
+CairoPDF(paste0("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Anemia_Uveitis_in_tissues/in_PPI.pdf"))
+plot(g_anemia_uve,
+     vertex.shape = "pie",
+     vertex.pie=values,
+     vertex.pie.color = list(c("#8E3179", "#87C1FF")),
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.frame.color = NA,
+     
+     edge.curved = 0.1,
+     
+     layout = coord)
+title("Anemia and Uveitis in PPI")
+dev.off()
+```
+
+```{r}
+anemia_uve_tissues <- all_sab %>%
+  filter(dis1 == "anemia hemolytic") %>%
+  filter(dis2 == "uveitis") %>%
+  pull(tissue)
+
+# for loop over tissues
+for(tiss in anemia_uve_tissues){
+  # get tissue genes
+  genes_tiss <- tissue_data %>% filter(term == tiss) %>% pull(HGNC_Symbol)
+  
+  V(g_anemia_uve)$Anemia_tiss <- V(g_anemia_uve)$Anemia
+  V(g_anemia_uve)$Uve_tiss <- V(g_anemia_uve)$Uve
+  V(g_anemia_uve)$tiss <- ifelse(V(g_anemia_uve)$name %in% genes_tiss, 0, 1) # if in tiss, colorful pie
+  for(gene in V(g_anemia_uve)){
+    if(V(g_anemia_uve)$tiss[gene] == 1){
+      V(g_anemia_uve)$Anemia_tiss[gene] = 0
+      V(g_anemia_uve)$Uve_tiss[gene] = 0
+    }
+  }
+  
+  values <- lapply(1:length(vs), function(x) c(V(g_anemia_uve)$Anemia_tiss[x], V(g_anemia_uve)$Uve_tiss[x], V(g_anemia_uve)$tiss[x]))
+
+  # make sure to save figures in its own folder
+  CairoPDF(paste0("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Anemia_Uveitis_in_tissues/in_",tiss,".pdf"))
+  plot(g_anemia_uve,
+     vertex.shape = "pie",
+     vertex.pie=values,
+     vertex.pie.color = list(c("#8E3179", "#87C1FF", "#D3D3D3")),
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.frame.color = NA,
+     
+     edge.curved = 0.1,
+     
+     layout = coord)
+  title(paste0("Anemia and Uveitis in ", tiss))
+  dev.off()
+}
+
+```
+
+
+
+# Juvenile arthritis and glomerulonephritis
+```{r}
+# plot the RA disease module in the ppi
+ja_genes <- GDA_auto %>% filter(NewName == "arthritis juvenile") %>% 
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% pull(HGNC_Symbol)
+g_ja <- induced_subgraph(ppi_g, ja_genes) #%>% extract_LCC()
+
+# plot the glomerulonephritis disease module in the ppi
+glom_genes <- GDA_auto %>% filter(NewName == "glomerulonephritis") %>% 
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% pull(HGNC_Symbol)
+g_glom <- induced_subgraph(ppi_g, glom_genes) #%>% extract_LCC()
+
+# plotting both disease modules
+g_ja_glom <- induced_subgraph(ppi_g, c(glom_genes, ja_genes)) #%>% extract_LCC()
+
+# add disease names as  feature
+V(g_ja_glom)$JA <- ifelse(V(g_ja_glom)$name %in% ja_genes, 1, 0)
+V(g_ja_glom)$Glom <- ifelse(V(g_ja_glom)$name %in% glom_genes, 1, 0)
+
+vs = V(g_ja_glom)
+values <- lapply(1:length(vs), function(x) c(V(g_ja_glom)$JA[x], V(g_ja_glom)$Glom[x]))
+
+# use betweenness as an edge attribute
+E(g_ja_glom)$weight <- edge_betweenness(g_ja_glom) %>% CoDiNA::normalize()
+
+
+coord <- g_ja_glom %>%
+  layout_with_fr(., weights = E(.)$weight *2.5) %>%
+  igraph::norm_coords()
+
+CairoPDF(paste0("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/JA_Glom_in_tissues/in_PPI.pdf"))
+plot(g_ja_glom,
+     vertex.shape = "pie",
+     vertex.pie=values,
+     vertex.pie.color = list(c("#8E3179", "#87C1FF")),
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.frame.color = NA,
+     
+     edge.curved = 0.1,
+     
+     layout = coord)
+title("JA and Glom in PPI")
+dev.off()
+```
+
+```{r}
+ja_glom_tissues <- all_sab %>%
+  filter(dis1 == "arthritis juvenile") %>%
+  filter(dis2 == "glomerulonephritis") %>%
+  pull(tissue)
+
+# for loop over tissues
+for(tiss in ja_glom_tissues){
+  # get tissue genes
+  genes_tiss <- tissue_data %>% filter(term == tiss) %>% pull(HGNC_Symbol)
+  
+  V(g_ja_glom)$JA_tiss <- V(g_ja_glom)$JA
+  V(g_ja_glom)$Glom_tiss <- V(g_ja_glom)$Glom
+  V(g_ja_glom)$tiss <- ifelse(V(g_ja_glom)$name %in% genes_tiss, 0, 1) # if in tiss, colorful pie
+  for(gene in V(g_ja_glom)){
+    if(V(g_ja_glom)$tiss[gene] == 1){
+      V(g_ja_glom)$JA_tiss[gene] = 0
+      V(g_ja_glom)$Glom_tiss[gene] = 0
+    }
+  }
+  
+  values <- lapply(1:length(vs), function(x) c(V(g_ja_glom)$JA_tiss[x], V(g_ja_glom)$Glom_tiss[x], V(g_ja_glom)$tiss[x]))
+
+  # make sure to save figures in its own folder
+  CairoPDF(paste0("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/JA_Glom_in_tissues/in_",tiss,".pdf"))
+  plot(g_ja_glom,
+     vertex.shape = "pie",
+     vertex.pie=values,
+     vertex.pie.color = list(c("#8E3179", "#87C1FF", "#D3D3D3")),
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.frame.color = NA,
+     
+     edge.curved = 0.1,
+     
+     layout = coord)
+  title(paste0("JA and Glom in ", tiss))
+  dev.off()
+}
+
+```
+
+
+
+# Alopecia areata and MS
+```{r}
+# plot the alopecia areata disease module in the ppi
+alo_genes <- GDA_auto %>% filter(NewName == "alopecia areata") %>% 
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% pull(HGNC_Symbol)
+g_alo <- induced_subgraph(ppi_g, alo_genes) #%>% extract_LCC()
+
+# plot the MS disease module in the ppi
+ms_genes <- GDA_auto %>% filter(NewName == "multiple sclerosis") %>% 
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% pull(HGNC_Symbol)
+g_ms <- induced_subgraph(ppi_g, ms_genes) #%>% extract_LCC()
+
+# plotting both disease modules
+g_alo_ms <- induced_subgraph(ppi_g, c(alo_genes, ms_genes)) #%>% extract_LCC()
+
+# add disease names as  feature
+V(g_alo_ms)$Alopecia <- ifelse(V(g_alo_ms)$name %in% alo_genes, 1, 0)
+V(g_alo_ms)$MS <- ifelse(V(g_alo_ms)$name %in% ms_genes, 1, 0)
+
+vs = V(g_alo_ms)
+values <- lapply(1:length(vs), function(x) c(V(g_alo_ms)$Alopecia[x], V(g_alo_ms)$MS[x]))
+
+# use betweenness as an edge attribute
+E(g_alo_ms)$weight <- edge_betweenness(g_alo_ms) %>% CoDiNA::normalize()
+
+
+coord <- g_alo_ms %>%
+  layout_with_fr(., weights = E(.)$weight *2.5) %>%
+  igraph::norm_coords()
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Alopecia_MS_in_tissues/in_PPI.pdf")
+plot(g_alo_ms,
+     vertex.shape = "pie",
+     vertex.pie=values,
+     vertex.pie.color = list(c("#8E3179", "#87C1FF")),
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.frame.color = NA,
+     
+     edge.curved = 0.1,
+     
+     layout = coord)
+title("Alopecia and MS in PPI")
+dev.off()
+```
+
+```{r}
+alo_ms_tissues <- all_sab %>%
+  filter(dis1 == "alopecia areata") %>%
+  filter(dis2 == "multiple sclerosis") %>%
+  pull(tissue)
+
+# for loop over tissues
+for(tiss in alo_ms_tissues){
+  # get tissue genes
+  genes_tiss <- tissue_data %>% filter(term == tiss) %>% pull(HGNC_Symbol)
+  
+  V(g_alo_ms)$Alopecia_tiss <- V(g_alo_ms)$Alopecia
+  V(g_alo_ms)$MS_tiss <- V(g_alo_ms)$MS
+  V(g_alo_ms)$tiss <- ifelse(V(g_alo_ms)$name %in% genes_tiss, 0, 1) # if in tiss, colorful pie
+  for(gene in V(g_alo_ms)){
+    if(V(g_alo_ms)$tiss[gene] == 1){
+      V(g_alo_ms)$Alopecia_tiss[gene] = 0
+      V(g_alo_ms)$MS_tiss[gene] = 0
+    }
+  }
+  
+  values <- lapply(1:length(vs), function(x) c(V(g_alo_ms)$Alopecia_tiss[x], V(g_alo_ms)$MS_tiss[x], V(g_alo_ms)$tiss[x]))
+
+  # make sure to save figures in its own folder
+  CairoPDF(paste0("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Alopecia_MS_in_tissues/in_",tiss,".pdf"))
+  plot(g_alo_ms,
+     vertex.shape = "pie",
+     vertex.pie=values,
+     vertex.pie.color = list(c("#8E3179", "#87C1FF", "#D3D3D3")),
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.frame.color = NA,
+     
+     edge.curved = 0.1,
+     
+     layout = coord)
+  title(paste0("Alopecia and MS in ", tiss))
+  dev.off()
+}
+
+```

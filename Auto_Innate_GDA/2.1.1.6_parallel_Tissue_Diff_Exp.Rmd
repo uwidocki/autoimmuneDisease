@@ -1,0 +1,252 @@
+---
+title: "Untitled"
+author: "Ursula Widocki"
+date: '2022-06-09'
+output: html_document
+---
+
+######################################################################################
+#
+#
+#
+######################################################################################
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(edgeR)
+library(limma)
+library(statmod)
+library(downloader)
+
+library(preprocessCore)
+library(variancePartition)
+library(BiocParallel)
+
+
+```
+
+```{r}
+# read in gene expression data and load in the metadata
+phenoFile <- "https://storage.googleapis.com/gtex_analysis_v8/annotations/GTEx_Analysis_v8_Annotations_SampleAttributesDS.txt"
+pheno2File <- "https://storage.googleapis.com/gtex_analysis_v8/annotations/GTEx_Analysis_v8_Annotations_SubjectPhenotypesDS.txt"
+# read in gene expression
+cnts <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GTEx_Analysis_2017-06-05_v8_RNASeQCv1.1.9_gene_reads.gct")
+
+# read in metadata
+message("Downloading and reading files")
+pdFile <- tempfile("phenodat", fileext = ".txt")
+download(phenoFile, destfile = pdFile)
+pd <- read_tsv(pdFile)
+pd <- pd[pd$SAMPID %in% colnames(cnts),] # keep samples in expr data
+
+pd2File <- tempfile("phenodat2", fileext = ".txt")
+download(pheno2File, destfile = pd2File)
+pd2 <- read_tsv(pd2File)
+
+donor_ids <- list()
+i = 1
+for(sample_id in pd$SAMPID){
+  split_list <- unlist(strsplit(sample_id, "-", fixed = TRUE))
+  donor_id <- paste(split_list[1], split_list[2], sep='-')
+  donor_ids[i] <- donor_id
+  i<- i+1
+}
+pd$SUBJID <- unlist(donor_ids)
+# Merge samples and subjects data
+pdfinal <- merge(x = pd, y = pd2, by = "SUBJID", all = FALSE)
+
+# Keep only columns of interest
+pdfinal <- pdfinal[,c("SAMPID", "SUBJID", "SEX", "SMTSD", "SMGEBTCH")]
+
+# Create tissue names without special characters
+#samples_all_df$SMTS.no.sp.char <- gsub(' ', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', samples_all_df$SMTS)))
+pdfinal$sample <- gsub('-', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$SAMPID)))
+pdfinal$subject <- gsub('-', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$SUBJID)))
+pdfinal$tissue <- gsub(' ', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$SMTSD)))
+pdfinal$batch <- gsub('-', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$SMGEBTCH)))
+pdfinal$batch <- gsub(',', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', pdfinal$batch)))
+pdfinal$SEX <- as.factor(pdfinal$SEX)
+
+pdfinal <- as.data.frame(pdfinal)
+row.names(pdfinal) <- pdfinal$sample
+
+# get tissue subset
+#tiss_subset <- c("Adipose - Subcutaneous", "Breast - Mammary Tissue")
+#pdfinal <- pdfinal %>% 
+#  filter(SMTSD %in% tiss_subset)
+
+#pdfinal <- AnnotatedDataFrame(data.frame(pdfinal))
+```
+
+Make sure that the genes are mappable and are in the PPI
+```{r}
+# make sure genes map
+
+gene_map <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/multiple_hgnc_dict_set_2022-04-04.txt")
+cnts <- cnts %>%
+  filter(Description %in% gene_map$HGNC_Symbol)
+
+```
+
+```{r}
+# make sure genes are in the PPI
+
+# Read in PPI data
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+all_proteins <- unique(c(ppi_df$HGNC_Symbol.1, ppi_df$HGNC_Symbol.2))
+
+cnts <- cnts %>%
+  filter(Description %in% all_proteins)
+```
+
+# Process gene expression
+```{r}
+genes <- cnts$Name
+geneNames <- cnts$Description
+cnts <- as.data.frame(cnts)
+# expression matrix with gene symbols and select samples
+cnts <- cnts[,colnames(cnts) %in% c("Description", pdfinal$SAMPID)] 
+
+# get sum expression of repeated genes
+repeat_genes <- unique(cnts$Description[duplicated(cnts$Description)])
+#temp_cnts <- cnts[which(cnts$Description %in% repeat_genes),]
+repeat_genes_agg = aggregate(.~Description, cnts[cnts$Description %in% repeat_genes,], sum)
+cnts = rbind(cnts[!(cnts$Description %in% repeat_genes),], repeat_genes_agg)
+
+rownames(cnts) <- cnts$Description
+cnts <- subset(cnts, select=-c(Description))
+cnts <- as.matrix(cnts) # now, we need this as a matrix
+mode(cnts) <- "integer"
+
+# remove genes with <= 10 count
+throwAway <- which(rowSums(cnts) <= 10) 
+cnts <- cnts[-throwAway, ]
+
+# log2 normalize the data
+#cnts <- log2(cnts + 1)
+
+colnames(cnts) <- gsub('-', '.', colnames(cnts))
+genes <- sub("\\..*", "", rownames(cnts))
+```
+
+```{r}
+pdfinal <- pdfinal %>%
+  dplyr::select(tissue, subject, sample)
+```
+
+
+Get subset of data
+```{r}
+# get tissue subset
+tiss_subset <- c("Adipose - Subcutaneous", "Breast - Mammary Tissue")
+pdfinal <- pdfinal %>% 
+  filter(SMTSD %in% tiss_subset) %>%
+  dplyr::select(tissue, subject)
+
+cnts <- cnts[,rownames(pdfinal)]
+throwAway <- which(rowSums(cnts) <= 5) 
+cnts <- cnts[-throwAway, ]
+
+```
+
+
+cnts_temp <- cnts[1:50, 1:10]
+pdfinal_temp <- pdfinal %>% filter(sample %in% colnames(cnts_temp))
+
+
+Normalize by subject( person) and tissue
+
+# normalize by subject
+
+groups <- unique(pdfinal_temp$SUBJID) # by detailed tissue
+if(length(groups)>1){
+      normalizedMatrix <- sapply(unique(groups), function(i) {
+        print(i)
+        # get samples the subjects
+        pd_temp <- pdfinal_temp[which(pdfinal_temp$SUBJID %in% i),]
+        count_temp <- dplyr::select(as.data.frame(cnts_temp), rownames(pd_temp)) #[,c(rownames(pd_temp))]
+        nmat <- normalize.quantiles(as.matrix(count_temp))
+        colnames(nmat) <- colnames(count_temp)
+        rownames(nmat) <- rownames(count_temp)
+        nmat
+      })
+      normalizedMatrix <- Reduce("cbind", normalizedMatrix)
+      normalizedMatrix <- normalizedMatrix[, match(colnames(cnts_temp),
+                                                   colnames(normalizedMatrix))]
+    } else {
+      normalizedMatrix <- normalize.quantiles(cnts_temp)
+      colnames(normalizedMatrix) <- colnames(cnts_temp)
+      rownames(nmat) <- rownames(cnts_temp)
+    }
+
+
+
+
+# normalize by tissue
+
+tissues <- unique(pdfinal_temp$tissue)
+if(length(tissues)>1){
+      normalizedMatrix_2 <- sapply(unique(tissues), function(i) {
+        print(i)
+        pd_temp <- pdfinal_temp[which(pdfinal_temp$tissue %in% i),]
+        count_temp <- dplyr::select(as.data.frame(normalizedMatrix), rownames(pd_temp)) #[,c(rownames(pd_temp))]
+        nmat <- normalize.quantiles(as.matrix(count_temp))
+        colnames(nmat) <- colnames(count_temp)
+        rownames(nmat) <- rownames(count_temp)
+        nmat
+      })
+      normalizedMatrix_2 <- Reduce("cbind", normalizedMatrix_2)
+      normalizedMatrix_2 <- normalizedMatrix_2[, match(colnames(normalizedMatrix),
+                                                   colnames(normalizedMatrix_2))]
+    } else {
+      normalizedMatrix_2 <- normalize.quantiles(normalizedMatrix)
+      colnames(normalizedMatrix_2) <- colnames(normalizedMatrix)
+      rownames(normalizedMatrix_2) <- rownames(normalizedMatrix)
+    }
+
+```{r}
+# Standard usage of limma/voom
+geneExpr = DGEList(cnts)
+geneExpr = calcNormFactors(geneExpr)
+```
+
+```{r}
+# Specify parallel processing parameters
+# this is used implicitly by dream() to run in parallel
+param = SnowParam(6, "SOCK", progressbar=TRUE)
+
+# The variable to be tested must be a fixed effect
+form <- ~ tissue + (1|subject)
+
+# estimate weights using linear mixed model of dream
+vobjDream = voomWithDreamWeights(geneExpr, form, pdfinal, BPPARAM=param)
+
+# Fit the dream model on each gene
+# By default, uses the Satterthwaite approximation for the hypothesis test
+fitmm = dream(vobjDream, form, pdfinal)
+fitmm = eBayes(fitmm)
+```
+
+```{r}
+write.table(as.data.frame(vobjDream), file = "DE_Tissue_dream.tsv", sep = "/t", row.names = T, col.names = T)
+```
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,335 @@
+"innate immune response
+complement activation lectin pathway
+regulation of complement activation lectin pathway
+negative regulation of complement activation lectin pathway
+activation of innate immune response
+innate immune response activating cell surface receptor signaling pathway
+pattern recognition receptor signaling pathway
+stimulatory c type lectin receptor signaling pathway
+toll like receptor signaling pathway
+innate immune response in mucosa
+natural killer cell mediated immunity
+natural killer cell cytokine production
+natural killer cell mediated cytotoxicity directed against tumor cell target
+natural killer cell mediated immune response to tumor cell
+regulation of natural killer cell mediated immunity
+negative regulation of natural killer cell mediated immunity
+positive regulation of natural killer cell mediated immunity
+regulation of natural killer cell cytokine production
+negative regulation of natural killer cell cytokine production
+positive regulation of natural killer cell cytokine production
+cell surface pattern recognition receptor signaling pathway
+cytoplasmic pattern recognition receptor signaling pathway
+myd88 dependent toll like receptor signaling pathway
+myd88 independent toll like receptor signaling pathway
+innate immune response activating signal transduction
+regulation of natural killer cell mediated immune response to tumor cell
+negative regulation of natural killer cell mediated immune response to tumor cell
+positive regulation of natural killer cell mediated immune response to tumor cell
+regulation of natural killer cell mediated cytotoxicity directed against tumor cell target
+negative regulation of natural killer cell mediated cytotoxicity directed against tumor cell target
+positive regulation of natural killer cell mediated cytotoxicity directed against tumor cell target
+complement activation alternative pathway
+natural killer cell mediated cytotoxicity
+defense response incompatible interaction
+defense response to fungus incompatible interaction
+regulation of complement activation alternative pathway
+regulation of toll like receptor signaling pathway
+negative regulation of toll like receptor signaling pathway
+positive regulation of toll like receptor signaling pathway
+regulation of myd88 dependent toll like receptor signaling pathway
+negative regulation of myd88 dependent toll like receptor signaling pathway
+regulation of myd88 independent toll like receptor signaling pathway
+negative regulation of myd88 independent toll like receptor signaling pathway
+toll like receptor 1 signaling pathway
+toll like receptor 2 signaling pathway
+regulation of toll like receptor 2 signaling pathway
+negative regulation of toll like receptor 2 signaling pathway
+positive regulation of toll like receptor 2 signaling pathway
+toll like receptor 3 signaling pathway
+regulation of toll like receptor 3 signaling pathway
+negative regulation of toll like receptor 3 signaling pathway
+positive regulation of toll like receptor 3 signaling pathway
+toll like receptor 4 signaling pathway
+regulation of toll like receptor 4 signaling pathway
+negative regulation of toll like receptor 4 signaling pathway
+positive regulation of toll like receptor 4 signaling pathway
+toll like receptor 5 signaling pathway
+regulation of toll like receptor 5 signaling pathway
+negative regulation of toll like receptor 5 signaling pathway
+toll like receptor 6 signaling pathway
+toll like receptor 7 signaling pathway
+regulation of toll like receptor 7 signaling pathway
+negative regulation of toll like receptor 7 signaling pathway
+positive regulation of toll like receptor 7 signaling pathway
+toll like receptor 8 signaling pathway
+toll like receptor 9 signaling pathway
+regulation of toll like receptor 9 signaling pathway
+negative regulation of toll like receptor 9 signaling pathway
+positive regulation of toll like receptor 9 signaling pathway
+toll like receptor 10 signaling pathway
+response to type i interferon
+response to interferon gamma
+response to type iii interferon
+tirap dependent toll like receptor signaling pathway
+tirap dependent toll like receptor 4 signaling pathway
+trif dependent toll like receptor signaling pathway
+tram dependent toll like receptor signaling pathway
+tram dependent toll like receptor 4 signaling pathway
+toll like receptor tlr1:tlr2 signaling pathway
+toll like receptor tlr6:tlr2 signaling pathway
+suppression by virus of host type i interferon mediated signaling pathway
+suppression by virus of host innate immune response
+cytoplasmic pattern recognition receptor signaling pathway in response to virus
+rig i signaling pathway
+mda 5 signaling pathway
+regulation of viral induced cytoplasmic pattern recognition receptor signaling pathway
+negative regulation of viral induced cytoplasmic pattern recognition receptor signaling pathway
+regulation of mda 5 signaling pathway
+negative regulation of mda 5 signaling pathway
+regulation of rig i signaling pathway
+negative regulation of rig i signaling pathway
+regulation of natural killer cell mediated cytotoxicity
+protection from natural killer cell mediated cytotoxicity
+susceptibility to natural killer cell mediated cytotoxicity
+natural killer cell degranulation
+regulation of natural killer cell degranulation
+negative regulation of natural killer cell degranulation
+positive regulation of natural killer cell degranulation
+regulation of innate immune response
+positive regulation of innate immune response
+negative regulation of innate immune response
+negative regulation of natural killer cell mediated cytotoxicity
+positive regulation of natural killer cell mediated cytotoxicity
+negative regulation of complement activation alternative pathway
+positive regulation of complement activation alternative pathway
+negative regulation by symbiont of host innate immune response
+negative regulation by organism of innate immune response in other organism involved in symbiotic interaction
+regulation of respiratory burst involved in inflammatory response
+positive regulation of respiratory burst involved in inflammatory response
+negative regulation of respiratory burst involved in inflammatory response
+regulation of response to interferon gamma
+negative regulation of response to interferon gamma
+positive regulation of response to interferon gamma
+interferon gamma mediated signaling pathway
+regulation of interferon gamma mediated signaling pathway
+positive regulation of interferon gamma mediated signaling pathway
+negative regulation of interferon gamma mediated signaling pathway
+type i interferon signaling pathway
+regulation of type i interferon mediated signaling pathway
+negative regulation of type i interferon mediated signaling pathway
+positive regulation of type i interferon mediated signaling pathway
+antifungal innate immune response
+nucleotide binding oligomerization domain containing signaling pathway
+regulation of nucleotide binding oligomerization domain containing signaling pathway
+negative regulation of nucleotide binding oligomerization domain containing signaling pathway
+positive regulation of nucleotide binding oligomerization domain containing signaling pathway
+nucleotide binding oligomerization domain containing 1 signaling pathway
+regulation of nucleotide binding oligomerization domain containing 1 signaling pathway
+negative regulation of nucleotide binding oligomerization domain containing 1 signaling pathway
+positive regulation of nucleotide binding oligomerization domain containing 1 signaling pathway
+nucleotide binding oligomerization domain containing 2 signaling pathway
+regulation of nucleotide binding oligomerization domain containing 2 signaling pathway
+negative regulation of nucleotide binding oligomerization domain containing 2 signaling pathway
+positive regulation of nucleotide binding oligomerization domain containing 2 signaling pathway
+cellular response to interferon gamma
+cellular response to type i interferon
+positive regulation of mda 5 signaling pathway
+positive regulation of rig i signaling pathway
+regulation of antifungal innate immune response
+negative regulation of antifungal innate immune response
+adaptive immune response
+adaptive immune response based on somatic recombination of immune receptors built from immunoglobulin superfamily domains
+regulation of adaptive immune response
+positive regulation of adaptive immune response
+regulation of adaptive immune response based on somatic recombination of immune receptors built from immunoglobulin superfamily domains
+positive regulation of adaptive immune response based on somatic recombination of immune receptors built from immunoglobulin superfamily domains
+regulation of t helper 1 type immune response
+positive regulation of t helper 1 type immune response
+t helper 1 type immune response
+t helper 1 cell differentiation
+regulation of t helper 1 cell differentiation
+positive regulation of t helper 1 cell differentiation
+humoral immune response mediated by circulating immunoglobulin
+complement activation classical pathway
+immunoglobulin mediated immune response
+b cell mediated immunity
+t cell mediated cytotoxicity
+regulation of t cell mediated cytotoxicity
+positive regulation of t cell mediated cytotoxicity
+t cell cytokine production
+t cell mediated immunity
+regulation of t cell mediated immunity
+positive regulation of t cell mediated immunity
+regulation of t cell cytokine production
+positive regulation of t cell cytokine production
+type iii hypersensitivity
+regulation of type iii hypersensitivity
+positive regulation of type iii hypersensitivity
+regulation of type i hypersensitivity
+positive regulation of type i hypersensitivity
+b cell affinity maturation
+b cell cytokine production
+immunoglobulin production involved in immunoglobulin mediated immune response
+regulation of b cell mediated immunity
+positive regulation of b cell mediated immunity
+regulation of b cell cytokine production
+regulation of immunoglobulin mediated immune response
+positive regulation of immunoglobulin mediated immune response
+type i hypersensitivity
+type iia hypersensitivity
+regulation of type iia hypersensitivity
+positive regulation of type iia hypersensitivity
+type ii hypersensitivity
+regulation of type ii hypersensitivity
+positive regulation of type ii hypersensitivity
+antibody dependent cellular cytotoxicity
+regulation of antibody dependent cellular cytotoxicity
+positive regulation of antibody dependent cellular cytotoxicity
+negative regulation of t cell mediated immunity
+negative regulation of t cell cytokine production
+negative regulation of adaptive immune response
+negative regulation of adaptive immune response based on somatic recombination of immune receptors built from immunoglobulin superfamily domains
+negative regulation of t cell mediated cytotoxicity
+peripheral b cell tolerance induction
+tolerance induction dependent upon immune response
+peripheral tolerance induction
+regulation of humoral immune response mediated by circulating immunoglobulin
+positive regulation of humoral immune response mediated by circulating immunoglobulin
+somatic recombination of immunoglobulin genes involved in immune response
+somatic diversification of immunoglobulins involved in immune response
+t cell mediated immune response to tumor cell
+regulation of t cell mediated immune response to tumor cell
+positive regulation of t cell mediated immune response to tumor cell
+isotype switching
+isotype switching to igg isotypes
+t cell antigen processing and presentation
+cd4 positive alpha beta t cell cytokine production
+t helper 1 cell cytokine production
+t helper 17 type immune response
+t helper 17 cell differentiation
+t helper 17 cell lineage commitment
+regulation of t helper 17 type immune response
+positive regulation of t helper 17 type immune response
+regulation of t helper 17 cell differentiation
+positive regulation of t helper 17 cell differentiation
+regulation of t helper 17 cell lineage commitment
+positive regulation of t helper 17 cell lineage commitment
+negative regulation of t helper 1 type immune response
+negative regulation of t helper 1 cell differentiation
+negative regulation of b cell mediated immunity
+negative regulation of immunoglobulin mediated immune response
+negative regulation of humoral immune response mediated by circulating immunoglobulin
+immunoglobulin production in mucosal tissue
+t helper 2 cell cytokine production
+regulation of t helper 2 cell cytokine production
+positive regulation of t helper 2 cell cytokine production
+regulation of t helper 1 cell cytokine production
+positive regulation of t helper 1 cell cytokine production
+regulation of immunoglobulin production in mucosal tissue
+positive regulation of immunoglobulin production in mucosal tissue
+regulation of isotype switching
+positive regulation of isotype switching
+isotype switching to iga isotypes
+regulation of isotype switching to iga isotypes
+positive regulation of isotype switching to iga isotypes
+regulation of t cell antigen processing and presentation
+adaptive immune memory response
+regulation of adaptive immune memory response
+negative regulation of adaptive immune memory response
+regulation of tolerance induction dependent upon immune response
+negative regulation of type iia hypersensitivity
+type iv hypersensitivity
+regulation of type iv hypersensitivity
+negative regulation of type iv hypersensitivity
+positive regulation of type iv hypersensitivity
+negative regulation of type i hypersensitivity
+negative regulation of antibody dependent cellular cytotoxicity
+t helper 1 cell lineage commitment
+immunoglobulin biosynthetic process involved in immune response
+immunoglobulin secretion involved in immune response
+tolerance induction to tumor cell
+b cell antigen processing and presentation
+peripheral t cell tolerance induction
+germinal center formation
+regulation of b cell antigen processing and presentation
+negative regulation of t cell antigen processing and presentation
+regulation of germinal center formation
+negative regulation of germinal center formation
+positive regulation of germinal center formation
+positive regulation of tolerance induction dependent upon immune response
+regulation of peripheral tolerance induction
+positive regulation of peripheral tolerance induction
+regulation of tolerance induction to tumor cell
+positive regulation of tolerance induction to tumor cell
+regulation of peripheral t cell tolerance induction
+positive regulation of peripheral t cell tolerance induction
+negative regulation of type ii hypersensitivity
+regulation of complement activation classical pathway
+helper t cell enhancement of adaptive immune response
+interleukin 4 dependent isotype switching to ige isotypes
+cytotoxic t cell degranulation
+regulation of cytotoxic t cell degranulation
+negative regulation of cytotoxic t cell degranulation
+negative regulation of isotype switching
+negative regulation of complement activation classical pathway
+isotype switching to ige isotypes
+regulation of isotype switching to ige isotypes
+negative regulation of isotype switching to ige isotypes
+positive regulation of isotype switching to ige isotypes
+negative regulation of isotype switching to iga isotypes
+regulation of isotype switching to igg isotypes
+positive regulation of isotype switching to igg isotypes
+susceptibility to t cell mediated cytotoxicity
+immune complex formation
+positive regulation of adaptive immune memory response
+negative regulation of t helper 17 type immune response
+negative regulation of t helper 17 cell differentiation
+negative regulation of t helper 17 cell lineage commitment
+negative regulation of t helper 2 cell cytokine production
+regulation of interleukin 4 dependent isotype switching to ige isotypes
+positive regulation of interleukin 4 dependent isotype switching to ige isotypes
+complement and coagulation cascades
+platelet activation
+neutrophil extracellular trap formation
+leukocyte transendothelial migration
+cytosolic dna sensing pathway
+nod like receptor signaling pathway
+chemokine signaling pathway
+antigen processing and presentation
+fc epsilon ri signaling pathway
+c type lectin receptor signaling pathway
+rig i like receptor signaling pathway - homo sapiens
+il 17 signaling pathway
+hematopoietic cell lineage
+intestinal immune network for iga production
+b cell receptor signaling pathway
+t cell receptor signaling pathway
+th1 and th2 cell differentiation
+th17 cell differentiation
+fc gamma r mediated phagocytosis
+signaling by interleukins
+immunoregulatory interactions between a lymphoid and a non lymphoid cell
+interferon signaling
+signaling by the b cell receptor
+mhc class ii antigen presentation
+flt3 signaling
+costimulation by the cd28 family
+tcr signaling
+prolactin receptor signaling
+tnfr2 non canonical nf kb pathway
+butyrophilin family interactions
+fcgamma receptor dependent phagocytosis
+neutrophil degranulation
+toll like receptor cascades
+advanced glycosylation endproduct receptor signaling
+ddx58/ifih1 mediated induction of interferon alpha/beta
+nucleotide binding domain leucine rich repeat containing receptor signaling pathways
+dap12 interactions
+complement cascade
+cytosolic sensors of pathogen associated dna 
+antimicrobial peptides
+fc epsilon receptor signaling
+c type lectin receptors
+ros and rns production in phagocytes
+alpha protein kinase 1 signaling pathway"

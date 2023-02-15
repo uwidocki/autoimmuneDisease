@@ -1,0 +1,240 @@
+---
+title: "2.0.1_Autoimmune_Disease_LCCs"
+author: "Ursula Widocki"
+date: "8/15/2021"
+output: html_document
+---
+
+###########################################################################################################
+#
+# This markdown computes LCCs of each autoimmune disease
+#
+###########################################################################################################
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+library(igraph)
+library(magrittr)
+library(ggraph)
+library(BiRewire)
+library(superheat)
+library(NetSci)
+source("/Users/ursulawidocki/Desktop/BarabasiLab//NetMedTools.R")
+```
+
+```{r}
+# Read in immunity data
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+
+# Read in PPI data
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+# GDA
+GDA_data = fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new.tsv') # has isAutoimmune col
+GDA_auto <- GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+```
+
+
+# LCCs
+```{r}
+# Computes and Evaluates LCC of each disease
+
+autoimmune_dis_list = unique(GDA_auto$NewName)
+
+col_labels <- c("Disease", "LCCsize", "p_val", "Mean", "SD", "Z", "num_genes")
+autoimmune_LCC_df = data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(autoimmune_LCC_df) = col_labels
+
+# for each disease
+for (dis in autoimmune_dis_list){
+  print(dis)
+  dis_genes = GDA_auto %>% filter(NewName == dis) # get all disease genes
+  dis_genes = dis_genes$HGNC_Symbol
+  
+  LCC_dis = LCC_signif(G = ppi_g, targets = dis_genes, 
+                       num_bins_degree_G = 1, min_bin_degree = 1, iter = 1000)
+  
+  # add info to df
+  new_line <- c(dis, LCC_dis$size, LCC_dis$p_val, LCC_dis$emp_mean, 
+                LCC_dis$emp_SD, LCC_dis$Z, length(dis_genes))
+  autoimmune_LCC_df[nrow(autoimmune_LCC_df) + 1,] <- new_line
+  
+  # print LCC hist
+  #if(LCC_dis$p_val < 0.05){
+  #  lim = c(LCC_dis$size, LCC_dis$distribution)
+  #  hist(LCC_dis$distribution, main = paste0(dis, " Empirical LCC Distribution"), 
+  #      xlim = c(min(lim - 50), max(lim + 50)), col = 'gray75', 
+  #       ylab = "", breaks = 20)
+    
+   # abline(v = LCC_dis$size, col = "red")
+  #}
+  
+  # print degree distribution of LCC genes
+  
+  # print degree distribution of non-LCC genes
+}
+
+autoimmune_LCC_df$LCCsize <- as.numeric(autoimmune_LCC_df$LCCsize)
+autoimmune_LCC_df$p_val <- as.numeric(autoimmune_LCC_df$p_val)
+autoimmune_LCC_df$Mean <- as.numeric(autoimmune_LCC_df$Mean)
+autoimmune_LCC_df$SD <- as.numeric(autoimmune_LCC_df$SD)
+autoimmune_LCC_df$Z <- as.numeric(autoimmune_LCC_df$Z)
+autoimmune_LCC_df$num_genes <- as.numeric(autoimmune_LCC_df$num_genes)
+
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+autoimmune_LCC_df$LCC_prop <- autoimmune_LCC_df$LCCsize / autoimmune_LCC_df$num_genes
+
+autoimmune_LCC_df <- autoimmune_LCC_df %>% 
+  mutate(padj = p.adjust(p_val, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05"))
+
+```
+
+```{r}
+# save LCC info so you don't need to run this again...
+
+write.table(autoimmune_LCC_df, file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs_new.tsv", sep = "\t", row.names = F, col.names = T)
+```
+
+
+
+## Separation between diseases
+
+```{r}
+# calculate separation of all diseases
+
+#sep_signif <- NetSci::separation_Significance(ppi_g,
+#                                    ST = GDA_auto,
+#                                    Threads = 10,
+#                                    N = 1000,
+#                                    correct_by_target = TRUE)
+
+sep_whole_ppi <- NetSci::separation_Significance(ppi_g,
+                                    ST = GDA_auto,
+                                    Threads = 10,
+                                    N = 1000,
+                                    correct_by_target = F)
+
+sep_signif_whole_ppi <- sep_whole_ppi %>% 
+  mutate(Sab_padj = p.adjust(pvalue_lt, method = "fdr"))
+colnames(sep_signif_whole_ppi)[4] <- "Sab_p"
+
+write.table(sep_signif_whole_ppi, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/Autoimmune_Sep_Signif_whole_ppi_new.tsv", sep = "\t", row.names = T, col.names = T)
+```
+
+
+
+```{r}
+# Jaccard similarity
+
+jacc_dis = NetSci::Jaccard(GDA_auto)
+jacc_dis$Node.1 <- as.character(jacc_dis$Node.1)
+jacc_dis$Node.2 <- as.character(jacc_dis$Node.2)
+jacc_dis$Jaccard.Index <- as.numeric(jacc_dis$Jaccard.Index)
+
+
+```
+
+
+```{r}
+# Statistical signif of overlaps
+
+disease_pairs <- unique(GDA_auto$NewName)
+col_labels <- c("dis1", "dis2", "weight")
+hyper_dis_df <- data.frame(matrix(ncol = 3, nrow = 0))
+colnames(hyper_dis_df) <- col_labels
+
+for(i in 1:(length(disease_pairs)-1)){
+  #genes_i <- c(unique(GDA_auto[which(GDA_auto$NewName == disease_pairs[i]),][2]))
+  genes_i <- GDA_auto %>%
+    filter(NewName == disease_pairs[i])
+  genes_i <- unique(genes_i$HGNC_Symbol)
+  
+  for(j in (i+1):length(disease_pairs)){
+    #genes_j <- c(unique(GDA_auto[which(GDA_auto$NewName == disease_pairs[j]),][2]))
+    genes_j <- GDA_auto %>%
+      filter(NewName == disease_pairs[j])
+    genes_j <- unique(genes_j$HGNC_Symbol)
+    
+    all_genes <- unique(c(genes_i, genes_j))
+    universe_success <- intersect(genes_i, genes_j)
+    q <- length(universe_success) / length(all_genes)
+    universe_failure <- all_genes[!(all_genes %in% universe_success)]
+    size_collected <- length(all_genes)
+    
+    temp <- c(disease_pairs[i], disease_pairs[j], 
+              Hypergeometric.test(success = q, 
+                                  universe_success = length(universe_success), 
+                                  universe_failure = length(universe_failure), 
+                                  size_collected = size_collected))
+    hyper_dis_df[nrow(hyper_dis_df)+1,] <- temp
+    
+  }
+}
+
+hyper_dis_df$dis1 <- as.character(hyper_dis_df$dis1)
+hyper_dis_df$dis2 <- as.character(hyper_dis_df$dis2)
+hyper_dis_df$weight <- as.numeric(hyper_dis_df$weight)
+```
+
+```{r}
+# #combine jacc and sep 
+
+# edit jacc
+colnames(hyper_dis_df)[3] <- "p_Jacc"
+colnames(jacc_dis) <- c("dis1", "dis2", "Jacc")
+jacc_full_df <- left_join(jacc_dis, hyper_dis_df)
+
+# edit sep
+colnames(sep_signif_whole_ppi) <- c("dis1", "dis2", "Sab", "p_Sab","padj_Sab")
+
+# merge them all
+jacc_sep_full <- full_join(sep_signif_whole_ppi, jacc_full_df)
+
+write.table(jacc_sep_full, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/Autoimmune_jacc_sep.tsv", sep = "\t", row.names = F, col.names = T)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,140 @@
+---
+title: "2.0.1.4_Get_disease_modules"
+author: "Ursula Widocki"
+date: "2022-11-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+library(igraph)
+library(magrittr)
+library(ggraph)
+library(superheat)
+library(NetSci)
+library(patchwork)
+library(Cairo)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+```
+
+```{r}
+# Read in PPI data
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = igraph::degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+# GDA
+GDA_data = fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new2.tsv') # has isAutoimmune col
+GDA_auto <- GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+
+
+# LCCs
+autoimmune_LCC_df = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs_new2.tsv")
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+autoimmune_LCC_df$rLCC <- autoimmune_LCC_df$rLCC * 100
+
+signif_diseases <- autoimmune_LCC_df %>%
+  filter(signif == "padj < 0.05") %>%
+  pull(Disease)
+
+```
+
+# get genes that make up disease modules and save it as an annotationed list [Gene, Disease]
+```{r}
+dis_genes_df <- GDA_auto %>%
+  filter(NewName %in% signif_diseases) %>%
+  select(NewName, HGNC_Symbol)
+  # this has already been filtered for the PPI
+
+# save 
+write.table(dis_genes_df, file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/Disease_Genes_in_Modules.tsv", sep = "\t", row.names = F, col.names = T)
+```
+
+# get genes that make up disease modules and save it as an annotationed edgelist [Gene1, Gene2, Disease]
+```{r}
+dis_genes_df <- GDA_auto %>%
+  filter(NewName %in% signif_diseases) %>%
+  select(NewName, HGNC_Symbol)
+
+all_edges_df <- data.frame()
+
+for (dis in signif_diseases){
+  dis_genes_temp <- filter(dis_genes_df, NewName == dis) %>% pull(HGNC_Symbol)
+  dis_subgraph <- induced_subgraph(ppi_g, dis_genes_temp)
+  
+  # plot the modules to see what it looks like
+  #plot(dis_subgraph)
+  
+  # get edgelist of subgraph
+  edge_list <- as.data.frame(get.edgelist(dis_subgraph))
+  colnames(edge_list) <- c("Gene1", "Gene2")
+  edge_list$Disease <- dis
+  all_edges_df <- rbind(all_edges_df, edge_list)
+
+}
+
+# save
+write.table(all_edges_df, file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/Disease_Genes_in_Modules_edgelist.tsv", sep = "\t", row.names = F, col.names = T)
+```
+
+```{r}
+
+all_LCC_edges_df <- data.frame()
+
+for (dis in autoimmune_dis_list){
+  dis_subgraph <- induced_subgraph(ppi_g, dis_genes)
+  temp <- components(dis_subgraph)$membership
+  LCC_id <- which.max(components(dis_subgraph)$csize)
+  inLCC <- names(temp[temp == LCC_id])
+  LCC_subgraph <- induced_subgraph(ppi_g, inLCC)
+  
+  # get edgelist of subgraph
+  edge_list <- as.data.frame(get.edgelist(LCC_subgraph))
+  colnames(edge_list) <- c("Gene1", "Gene2")
+  edge_list$Disease <- dis
+  all_edges_df <- rbind(all_edges_df, edge_list)
+
+}
+
+# save [Gene2, Disease] as a separate dataframe, rbind it to [Gene1, Disease], compute separation and plot the graph
+
+#write.table(dis_genes_df, file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/Disease_Genes_in_Modules_LCC_only.tsv", sep = "\t", row.names = F, col.names = T)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

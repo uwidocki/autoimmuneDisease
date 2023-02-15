@@ -1,0 +1,162 @@
+---
+title: "Comparing_Tissue_LCCs"
+author: "Ursula Widocki"
+date: '2022-07-15'
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(data.table)
+```
+
+```{r}
+gtex_tiss_dis_LCCs <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Disease_Tissue_LCCs_GTEx_log_DEgenes.tsv")
+gtex_tiss_dis_LCCs %<>%
+  mutate(tiss_rLCC = (LCC_size/Disease_Tissue_Genes)*100) %>%
+  mutate(rLCC_50 = ifelse(tiss_rLCC > 50, "big rLCC", "small rLCC"))
+
+kitsak_tiss_dis_LCCs <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Kitsak_tissue_disease_LCC_data.txt")
+```
+
+```{r}
+# look at RA
+
+RA_gtex <- gtex_tiss_dis_LCCs %>%
+  filter(Disease_Name == "arthritis rheumatoid") %>%
+  filter(padj < 0.05)
+
+pl1 <- ggplot(RA_gtex) +
+  aes(x = Tissue, y = LCC_size) +
+  geom_col(fill = "#112446") +
+  labs(title = "RA Modules (adj. p-value < 0.05) in GTEx") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 10))
+
+```
+
+RA, MS, anemia hemolytic, behcet syndrome, celiac, UC, Crohn, glomerulonephritis, graves disease, SLE, psoriasis, uveitis
+
+```{r}
+RA_kitsak <- kitsak_tiss_dis_LCCs %>%
+  filter(`disease name` == "arthritis, rheumatoid")
+  
+pl2 <- ggplot(RA_kitsak) +
+  aes(x = `tissue name`, y = `lcc size`) +
+  geom_col(fill = "#112446") +
+  labs(title = "RA Modules in Kitsak et al.", y = "") +
+  ylim(c(0, 70)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 10))
+```
+
+```{r}
+library(patchwork)
+(pl1 + pl2)
+```
+
+
+
+
+```{r}
+autoimmune_LCC_df = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs_new.tsv")
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+signif_dis <- autoimmune_LCC_df %>%
+  filter(signif == "padj < 0.05")
+signif_dis <- c(unique(signif_dis$Disease))
+
+
+p1 <- gtex_tiss_dis_LCCs %>%
+  filter(Disease_Name %in% signif_dis) %>%
+  ggplot() +
+  aes(x = Disease_Name, 
+      y = Tissue, 
+      color = rLCC_50,
+      size = tiss_rLCC,
+      shape = Significance) +
+  geom_point() +
+  scale_color_manual(values = c("big rLCC" = "#007CBE", "small rLCC" = "grey80")) +
+  #scale_color_distiller(palette = "YlGnBu",
+  #                      direction = 1) +
+  # add ggnewscale to plot the red Xs
+  scale_shape_manual(values = c(16, 1)) +
+  scale_size(range = c(0.1, 5)) + 
+  labs(x = "Autoimmune Disease") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, size = 30), 
+        legend.position = "bottom", 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        text = element_text(size = 25))
+
+# Disease bar plot
+temp <- gtex_tiss_dis_LCCs %>%
+  filter(Disease_Name %in% signif_dis) %>% 
+  filter(padj < 0.05) %>% # uveitis dropped here
+  group_by(Disease_Name) %>% 
+  dplyr::summarise(n=n())
+# uveitis is getting filtered out since no signif LCCs, so we need to add it back
+temp <- rbind(temp, c("uveitis", 0)) %>% as.data.frame()
+temp <- rbind(temp, c("agammaglobulinemia", 0)) %>% as.data.frame()
+temp <- rbind(temp, c("alopecia areata", 0)) %>% as.data.frame()
+temp <- rbind(temp, c("arthritis psoriatic", 0)) %>% as.data.frame()
+temp <- rbind(temp, c("idiopathic pulmonary fibrosis", 0)) %>% as.data.frame()
+temp <- rbind(temp, c("polymyositis", 0)) %>% as.data.frame()
+temp$n <- as.integer(temp$n)
+
+p3 <- temp %>%
+  ggplot() +
+  aes(x = Disease_Name, y = n) +
+  geom_bar(fill = "#122265", stat = "identity") + #position = position_dodge(preserve = "single")
+  theme_minimal() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  labs(y = "LCC count")
+
+
+# Tissue bar plot
+p2 <- gtex_tiss_dis_LCCs %>%
+  filter(Disease_Name %in% signif_dis) %>% 
+  filter(padj < 0.05) %>% 
+  group_by(Tissue) %>% 
+  dplyr::summarise(n=n()) %>%
+  ggplot() +
+  aes(x = Tissue, weight = n) +
+  geom_bar(fill = "#122265") + # "#333366"
+  labs(y = "LCC count") +
+  theme_minimal() +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
+  coord_flip()
+
+
+CairoPDF("~/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Disease-Tissue_LCC_logDE.pdf", width = 25, height = 20)
+# patchwork things together
+
+((p3 + plot_spacer() + plot_layout(widths = c(5,1))) / ((p1 + p2) + plot_layout(widths = c(5,1))))+ plot_layout(heights = c(1,6))
+
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

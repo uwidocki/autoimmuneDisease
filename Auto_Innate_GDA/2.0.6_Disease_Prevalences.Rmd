@@ -1,0 +1,219 @@
+---
+title: "2.0.6_Disease_Prevalence"
+author: "Ursula Widocki"
+date: '2022-06-03'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+require(dplyr)
+require(tidyverse)
+library(data.table)
+library(igraph)
+library(ggplot2)
+library(Cairo)
+`%ni%` <- Negate(`%in%`)
+```
+
+```{r}
+comorb_data <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Commorbidities_RR_Gysi_both_sides_5digits.csv")
+comorb_data <- as.data.frame(comorb_data)
+
+# Read in PPI data
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+# GDA
+GDA_data = fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new.tsv') # has isAutoimmune col
+GDA_auto <- GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+
+```
+
+```{r}
+dis1_df <- as.data.frame(comorb_data) %>% 
+  dplyr::select(disease_1, prev_1)
+colnames(dis1_df) <- c("Disease", "prev")
+
+dis2_df <- comorb_data %>% 
+  dplyr::select(disease_2, prev_2)
+colnames(dis2_df) <- c("Disease", "prev")
+
+dis_prev_df <- rbind(dis1_df, dis2_df)
+dis_prev_df <- unique(dis_prev_df)
+rownames(dis_prev_df) <- dis_prev_df$Disease
+
+uveitis_sum <- dis_prev_df["uveitis anterior",][2] + dis_prev_df["uveitis posterior",][2]
+dis_prev_df["uveitis",] <- c("uveitis", uveitis_sum)
+
+```
+
+```{r}
+target <- c("arthritis rheumatoid", "lupus erythematosus systemic", "crohn disease",
+            "multiple sclerosis", "colitis ulcerative", "arthritis juvenile", "endometriosis",
+            "psoriasis", "diabetes mellitus type 1", "celiac disease", "chagas disease",
+            "scleroderma systemic", "connective tissue diseases", "graves disease", 
+            "glomerulonephritis membranoproliferative", "narcolepsy", "idiopathic pulmonary fibrosis",
+            "cholangitis sclerosing", "behcet syndrome", "eosinophilic esophagitis",
+            "amyloidosis", "mucocutaneous lymph node syndrome", "sjorgens syndrome",
+            "sarcoidosis", "arthritis psoriatic", "neutropenia", "agammaglobulinemia",
+            "hepatitis autoimmune", "pemphigoid gestationis", "polymyositis", 
+            "alopecia areata", "anemia hemolytic autoimmune", "myasthenia gravis", 
+            "antiphospholipid syndrome", "uveitis", "addison disease", "dermatomyositis",
+            "hashimoto disease", "restless leg syndrome", "hidradenitis suppurativa", 
+            "takayasu arteritis", "stiff person syndrome", "pemphigoid bullous", 
+            "reflex sympathetic dystrophy", "purpura thrombotic thrombocytopenic", 
+            "bracial plexus neuritis", "myositis inclusion body")
+
+all_diseases <- unique(c(dis_prev_df$Disease))
+target <- target[which(target %in% all_diseases)]
+
+auto_dis_prev_df <- dis_prev_df %>% filter(Disease %in% target)
+
+# change names to what they are in the GDA data
+auto_dis_prev_df$Disease[26] <- "scleroderma"
+auto_dis_prev_df$Disease[11] <- "glomerulonephritis"
+auto_dis_prev_df$Disease[2] <- "anemia hemolytic"
+auto_dis_prev_df <- as.data.frame(auto_dis_prev_df)
+rownames(auto_dis_prev_df) <- auto_dis_prev_df$Disease
+```
+
+```{r}
+# get auto_dis_prev_df in order of disease list to see trend
+target <- rev(target)
+idx <- sapply(target, function(x) {
+    which(auto_dis_prev_df$Disease == x)
+})
+auto_dis_prev_df <- auto_dis_prev_df[unlist(idx),]
+
+rownames(auto_dis_prev_df) <- auto_dis_prev_df$Disease
+auto_dis_prev_df$Disease = factor(row.names(auto_dis_prev_df), levels = row.names(auto_dis_prev_df))
+
+prev_plot <- ggplot(auto_dis_prev_df) +
+  aes(x = prev, y = Disease) +
+  geom_point(shape = "circle", size = 1.5, colour = "#112446") +
+  labs(x = "Prevalence", y = "Disease", title = "Autoimmune Disease Prevalence") +
+  theme_minimal()
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Autoimmune_Prevalence_.pdf", height = 8, width = 10)
+prev_plot
+dev.off()
+```
+
+```{r}
+disease_gene_assoc = GDA_auto %>%
+  group_by(NewName) %>%
+  summarize(n = n())
+rownames(disease_gene_assoc) = disease_gene_assoc$NewName
+colnames(disease_gene_assoc)[1] <- "Disease"
+```
+
+```{r}
+auto_dis_prev_df <- left_join(auto_dis_prev_df, disease_gene_assoc)
+```
+
+```{r}
+auto_dis_prev_df$Trend <- ifelse(auto_dis_prev_df$Disease %in% target[1:19], "Lower", "Upper")
+
+plot_prev <- ggplot(auto_dis_prev_df) +
+  aes(x = n, y = prev, label = Disease, color = Trend) +
+  geom_point(shape = "circle", size = 1.5) +
+  geom_text(check_overlap = F, size = 5) +
+  scale_y_log10() +
+  #scale_x_log10() +
+  scale_color_manual(values = c("navy", "purple")) +
+  labs(y = "Disease Prevalence", x = "Number of Genes", title = "Disease Prevalence vs Number of Genes") +
+  theme_minimal() +
+  theme(text = element_text(size = 18))
+
+CairoPDF("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/Figures/Dis_Prev_vs_NumGenes.pdf", height = 14, width = 16)
+plot_prev
+dev.off()
+```
+
+# see if I can replicate the trend using prev on the x-axis instead of NumGenes
+```{r}
+# LCCs
+autoimmune_LCC_df = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/AutoDis_LCCs_new.tsv")
+autoimmune_LCC_df <- as.data.frame(autoimmune_LCC_df)
+rownames(autoimmune_LCC_df) <- autoimmune_LCC_df$Disease
+autoimmune_LCC_df$num_genes <- as.numeric(autoimmune_LCC_df$num_genes)
+
+dis_prev_LCC <- left_join(autoimmune_LCC_df, auto_dis_prev_df)
+rownames(dis_prev_LCC) <- dis_prev_LCC$Disease
+dis_prev_LCC <- na.omit(dis_prev_LCC)
+
+# Now combine LCC, signif, and num_genes
+dis_prev_LCC <- dis_prev_LCC %>%
+  arrange(num_genes)
+dis_prev_LCC$Disease = factor(row.names(dis_prev_LCC), 
+                                   levels = row.names(dis_prev_LCC))
+                                   
+
+ggplot(dis_prev_LCC  %>% arrange(num_genes)) +
+  aes(x = Disease, y = num_genes, colour = signif, size = LCCsize) +
+  geom_point(shape = "circle", alpha = 0.5) +
+  scale_size(range = c(0, 10)) +
+  labs(x = "Disease", y = "Number of disease genes", title = "Statistical Significance of Autoimmune Disease Modules and Number of Disease Genes") +
+  scale_color_manual(values = c("padj < 0.05" = "#FB5607", "padj > 0.05" = "#8D99AE")) +
+  theme_minimal() + 
+  theme(text = element_text(size = 17),
+        #axis.text = element_text(size = 15),
+        legend.position = "bottom") +
+  coord_flip()
+
+```
+
+```{r}
+dis_prev_LCC$log_prev <- log(dis_prev_LCC$prev + 1)
+
+ggplot(dis_prev_LCC) +
+  aes(x = Disease, y = prev, colour = signif, size = LCCsize) +
+  geom_point(shape = "circle", alpha = 0.5) +
+  scale_size(range = c(0, 10)) +
+  #scale_y_log10() +
+  labs(x = "Disease", y = "Disease Prevalence", title = "Statistical Significance of Autoimmune Disease Modules and Disease Prevalence") +
+  scale_color_manual(values = c("padj < 0.05" = "#FB5607", "padj > 0.05" = "#8D99AE")) +
+  theme_minimal() + 
+  theme(text = element_text(size = 17),
+        #axis.text = element_text(size = 15),
+        legend.position = "bottom") +
+  coord_flip()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

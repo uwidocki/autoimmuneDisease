@@ -1,0 +1,145 @@
+---
+title: "2.1_Tissue_DE_GTEx"
+author: "Ursula Widocki"
+date: "5/10/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# packages
+library(tidyverse)
+library(data.table)
+library(DESeq2)
+#library(apeglm)
+```
+
+```{r}
+# read in raw tissue counts
+data_df = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GTEx_Analysis_2017-06-05_v8_RNASeQCv1.1.9_gene_reads.gct")
+
+# read in metadata
+samples_df = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GTEx_Analysis_v8_Annotations_SampleAttributesDS.txt")
+subjects_df = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GTEx_Analysis_v8_Annotations_SubjectPhenotypesDS.txt")
+
+```
+
+```{r}
+## Process metadata
+
+# Keep samples present in gene expression data
+samples_df <- samples_df[samples_df$SAMPID %in% colnames(data_df),]
+
+# Add column with subject ID 
+# sample ID --> GTEX-14753-1626-SM-5NQ9L
+# subject ID --> GTEX-14753
+# SMTS --> tissue
+# SMTSD --> detailed tissue
+# info --> https://sites.google.com/broadinstitute.org/gtex-faqs/home
+donor_ids <- list()
+i = 1
+for(sample_id in samples_df$SAMPID){
+  split_list <- unlist(strsplit(sample_id, "-", fixed = TRUE))
+  donor_id <- paste(split_list[1], split_list[2], sep='-')
+  donor_ids[i] <- donor_id
+  i<- i+1
+}
+samples_df$SUBJID <- unlist(donor_ids)
+
+# Merge samples and subjects data
+samples_df <- merge(x = samples_df, y = subjects_df, by = "SUBJID", all = FALSE)
+
+# Keep only columns of interest
+samples_df <- samples_df[,c("SAMPID", "SUBJID", "SEX", "SMTSD", "SMGEBTCH")]
+
+# Create tissue names without special characters
+#samples_all_df$SMTS.no.sp.char <- gsub(' ', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', samples_all_df$SMTS)))
+samples_df$sample <- gsub('-', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', samples_df$SAMPID)))
+samples_df$subject <- gsub('-', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', samples_df$SUBJID)))
+samples_df$tissue <- gsub(' ', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', samples_df$SMTSD)))
+samples_df$batch <- gsub('-', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', samples_df$SMGEBTCH)))
+samples_df$batch <- gsub(',', '.', gsub(' - ', '.', gsub('[\\(\\)]', '', samples_df$batch)))
+samples_df$SEX <- as.factor(samples_df$SEX)
+
+samples_df <- as.data.frame(samples_df)
+row.names(samples_df) <- samples_df$sample
+
+```
+
+```{r}
+# use sum of expression values of duplicated genes
+
+repeated_genes <- unique(data_df$Description[duplicated(data_df$Description)])
+
+data_df = subset(data_df, select=-Name) # removes ENS gene names
+repeated_genes_agg = aggregate(.~Description, data_df[data_df$Description %in% repeated_genes,], sum) # we want the sum
+data_df = rbind(data_df[!(data_df$Description %in% repeated_genes),], repeated_genes_agg)
+
+data_df <- as.data.frame(data_df)
+row.names(data_df) <- data_df$Description
+data_df <- subset(data_df, select=-Description)
+
+colnames(data_df) <- gsub('-', '.', colnames(data_df))
+
+data_df <- as.matrix(data_df)
+mode(data_df) <- "integer"
+
+```
+
+```{r}
+# remove rows of genes with 0 count
+
+throwAway <- which(rowSums(data_df) == 0) 
+data_df <- data_df[-throwAway, ]
+```
+
+Normalize gene counts
+```{r}
+# log norm all data
+
+# normalize by sample
+
+# normalize by tissue
+
+# filter lowly expressed genes
+
+```
+
+# Differential Expression
+```{r}
+# Set up to run DESeq2
+
+#library(apeglm)
+
+dds <- DESeqDataSetFromMatrix(countData = data_df,
+                              colData = samples_df,
+                              design = ~ tissue + batch + subject)
+dds <- DESeq(dds)
+resultsNames(dds) # lists the coefficients
+res <- results(dds, name="condition_tissues")
+# or to shrink log fold changes association with condition:
+res <- lfcShrink(dds, coef="condition_tissues", type="apeglm")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

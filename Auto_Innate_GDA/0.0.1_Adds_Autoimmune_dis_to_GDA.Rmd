@@ -1,0 +1,94 @@
+---
+title: "0.0.1_Adds_Autoimmune_dis_to_GDA"
+author: "Ursula Widocki"
+date: "8/4/2021"
+output: html_document
+---
+###############################################################################################
+#
+# This script adjusts GDA data to mark diseases that are autoimmune diseases and adjust some
+# names that are subtypes or under multiple names
+#
+###############################################################################################
+
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+```
+
+```{r}
+GDA_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Data_Clean_Complete.csv", 
+                        sep = ",", stringsAsFactors = F, header = T)
+
+final_auto_list <- c(read_tsv(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/autoimmune_disease_naming_scheme.txt", 
+                                col_names = F, col_types = cols())) %>% unlist()
+```
+
+```{r}
+# Adjusts some names
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "thyroiditis autoimmune", 
+                           replacement = "hashimoto disease", fixed = TRUE)
+
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma diffuse", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma systemic", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma limited", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma localized", 
+                           replacement = "scleroderma", fixed = TRUE)
+
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "ophthalmoplegia chronic progressive external", 
+                           replacement = "ophthalmoplegia", fixed = TRUE)
+GDA_data$NewName = unlist(GDA_data$NewName)
+```
+
+```{r}
+# Adds columns marking if autoimmune
+dis_all = unique(GDA_data$NewName)
+
+sum(final_auto_list %in% dis_all)
+
+GDA_data$isAutoimmune = ifelse(GDA_data$NewName %in% final_auto_list, 1, 0)
+
+```
+```{r}
+# checking the above operations
+
+temp = GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  unique()
+
+length(unique(temp$NewName))
+
+```
+
+```{r}
+write.table(GDA_data, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto.csv", sep = ",", row.names = T, col.names = T)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,289 @@
+---
+title: "2.0.2_Autoimmune_TissueHomogen"
+author: "Ursula Widocki"
+date: "9/30/2021"
+output: html_document
+---
+
+```{r}
+rm(list=ls())
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+library(igraph)
+library(superheat)
+library(corrplot)
+library(patchwork)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+```
+
+```{r}
+# Read in immunity genes (just in case you want to incorporate them)
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", 
+                        sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+
+# Read in PPI data
+ppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/PPI_2022_04042022.csv')
+ppi_df <- ppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.2) & ppi_df$HGNC_Symbol.2 ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$HGNC_Symbol.1) & ppi_df$HGNC_Symbol.1 ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g <- simplify(ppi_g)
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+# GDA
+GDA_data = fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new.tsv') # has isAutoimmune col
+GDA_auto <- GDA_data %>%
+  filter(isAutoimmune == 1) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  filter(HGNC_Symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique()
+
+## Read in tissue data
+tissue_dat <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Edited_2017-06-05_v8_RNASeQCv1.1.9_gene_median_tpm.gct.txt", sep = "\t", stringsAsFactors = F, header = T)
+tissue_dat <- tissue_dat %>% select(-Name)
+# if there is a duplicate, take the sum of their collective expression values
+summary_gtex = tissue_dat %>% 
+  pivot_longer(-c(1)) %>%
+  #filter(value > 0) %>% 
+  group_by(name, Description) %>%
+  summarise(sum = sum(value)) %>% 
+  mutate(Q50 = quantile(sum, 0.50))
+colnames(summary_gtex)[1] <- "Tissue"
+
+```
+
+```{r}
+# Calculates tissue homogeneity of the diseases
+#  TH_i = max_j[ n^j_i / n_i ]         where i = disease and j = tissue
+####### ------>  maybe also store the tissues where this max occurs #########
+
+autoimmune_dis <- unique(GDA_auto$NewName)
+tissues <- unique(summary_gtex$Tissue)
+
+col_labels <- c(tissues, "max")
+tissueScores_df <- data.frame(matrix(ncol = length(col_labels), nrow = length(autoimmune_dis))) # store disease and its tissue scores and max
+colnames(tissueScores_df) <- col_labels
+rownames(tissueScores_df) <- autoimmune_dis
+
+# for each disease
+for(dis in autoimmune_dis){
+  dis_genes <- GDA_auto %>% filter(NewName == dis)
+  dis_genes <- unique(dis_genes$HGNC_Symbol)
+  
+  for(t in tissues){
+    # get disease genes that are in tissue t
+    tiss_subset <- summary_gtex %>%
+      filter(Tissue == t)  %>%
+      filter(sum >= Q50) %>% # mean norm for tissue signal
+      filter(Description %in% dis_genes) # disease genes in tissue
+    
+    nj_i <- length(unique(tiss_subset$Description)) # number of dis 
+    temp <- tiss_subset[which(tiss_subset[,2] > 5),]
+    n_i <- length(unique(dis_genes))
+    
+    tissueHomogen <- nj_i / n_i
+    tissueScores_df[dis, t] <- tissueHomogen
+    
+  }
+  
+  tissueScores_df[dis, "max"] <- max(tissueScores_df[dis, 1:length(tissues)])
+  
+}
+
+```
+
+```{r}
+# get distribution for tissue homogeniety for each disease
+
+iter = 1000 # should be 10^5 -> check in Goh if normalized by mean for this
+
+col_labels <- c("p_val")
+tissHomo_pval <- data.frame(matrix(ncol = length(col_labels), nrow = length(autoimmune_dis))) 
+colnames(tissHomo_pval) <- col_labels
+rownames(tissHomo_pval) <- autoimmune_dis
+
+for(dis in autoimmune_dis){ # for each disease
+  print(dis) ######## debug
+  distrib <- c()
+  # pick the same number of genes randomly in tissue_dat$Description
+  dis_genes <- GDA_auto %>% filter(NewName == dis)
+  num_dis_genes <- length(unique(dis_genes$HGNC_Symbol))
+  
+  # make the distribution
+  for(i in seq(1:iter)){ # up to 10^5 times
+    # tissue genes
+    temp_tissue <- summary_gtex %>%
+      filter(sum >= Q50)
+    
+    # simulate disease in tissue
+    temp_tissueScores <- c() # stores tissue ratios 
+    
+    # calc tissuehomogeneity
+    for(tissue in tissues){
+      tiss_subset <- temp_tissue %>%
+        filter(Tissue == t) 
+      
+      tiss_genes <- c(unique(temp_tissue$Description))
+      numTissueGenes <- length(tiss_genes)
+      rand_ind <- sample(1:numTissueGenes, num_dis_genes, replace=F)
+      rand_genes <- tiss_genes[rand_ind] # randomly sampled genes
+      
+      nj_i <- length(unique(tiss_subset$Description))
+      n_i <- num_dis_genes
+      
+      tissueHomogen <- nj_i / n_i
+      temp_tissueScores <- c(temp_tissueScores, tissueHomogen)
+      
+    }
+    # store max in distrib
+    distrib <- c(distrib, max(temp_tissueScores))
+    
+  }
+  # calc p val
+  p_val <- calc_p_val(distrib, tissueScores_df[dis, "max"])
+  tissHomo_pval[dis,] <- p_val$p_ut
+}
+
+
+
+```
+```{r}
+tissHomo_pvals <- cbind(tissueScores_df$max, tissHomo_pval)
+tissHomo_pvals$NewName <- rownames(tissHomo_pvals)
+
+tissHomo_df <- GDA_auto %>%
+  group_by(NewName) %>%
+  summarize(num_genes = n())
+tissHomo_df <- merge(tissHomo_df, tissHomo_pvals, by = "NewName")
+colnames(tissHomo_df)[3] <- "max"
+
+tissHomo_df <- tissHomo_df %>% 
+  mutate(padj = p.adjust(p_val, method = "fdr")) %>%
+  mutate(signif = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05"))
+
+#tissHomo_df$signif <- ifelse(tissHomo_df$padj < 0.05, "signif", "nonsignif")
+
+#tissHomo_df %<>% arrange(num_genes)
+#tissHomo_df$Disease = factor(row.names(tissHomo_df), levels = row.names(tissHomo_df))
+
+plt <- ggplot(tissHomo_df) +
+  aes(x = reorder(NewName, max), y = max, colour = signif, size = max) +
+  geom_point(shape = "circle", fill = "turquoise3", alpha = 0.4) +
+  scale_color_hue(direction = 1) +
+  scale_color_manual(values = c("padj < 0.05" = "turquoise3", "padj > 0.05" = "tomato1")) +
+  labs(x = "Disease", y = "Tissue Homogeneity", title = "Tissue Homogeneity of Autoimmune Diseases") +
+  theme_minimal() +
+  #theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip() +
+  theme(legend.position = "bottom", axis.text = element_text(size = 15), title = element_text(size = 20))
+
+
+CairoPDF("./Figures/Tissue_Homo_of_Autoimmune_dis.pdf", height = 15, width = 12)
+plt
+dev.off()
+
+```
+
+
+
+
+
+
+################# Code I'm not using here
+```{r}
+data <- final_LCCs
+data %<>%
+  mutate(padj = p.adjust(LCC_p, method = "fdr")) %>%
+  mutate(prop_lcc = (LCC_size/Disease_Tissue_Genes)*100) %>%
+  mutate(Ps = ifelse(padj < 0.05, "padj < 0.05", "padj > 0.05")) %>%
+  mutate(shape = ifelse(padj < 0.05, 1, 4))
+# Clean up tissue names in data
+data$Tissue = data$Tissue %>%
+  stringr::str_replace_all(., "\\.", " ") %>%
+  stringr::str_squish()
+data %<>% filter(Tissue %ni% c("Cells EBV transformed lymphocytes", "Cells Cultured fibroblasts"))
+
+```
+
+```{r}
+# plot the LCCs of dis in tissues
+
+# correlogram kind of scatterplot of LCCs of dis in tissues
+p1 <- data %>%
+  filter(Disease_Name %in% signif_dis) %>%
+  ggplot() +
+  aes(x = Disease_Name, 
+      y = Tissue, 
+      color = prop_lcc,
+      size = prop_lcc,
+      shape = Ps) +
+  geom_point() +
+  scale_color_distiller(palette = "YlGnBu", 
+                        direction = 1) +
+  scale_shape_manual(values = c(16, 4)) +
+  scale_size(range = c(0.1, 4)) + 
+  labs(x = "Autoimmune Disease") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90), 
+        legend.position = "bottom", 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+
+# Disease bar plot
+temp <- data %>%
+  filter(Disease_Name %in% signif_dis) %>% 
+  filter(padj < 0.05) %>% # neutropenia dropped here
+  group_by(Disease_Name) %>% 
+  dplyr::summarise(n=n())
+# neutropenia is getting filtered out since no signif LCCs, so we need to add it back
+temp <- rbind(temp, c("neutropenia", 0)) %>% as.data.frame()
+temp$n <- as.integer(temp$n)
+
+p3 <- temp %>%
+  ggplot() +
+  aes(x = Disease_Name, y = n) +
+  geom_bar(fill = "#122265", stat = "identity") + #position = position_dodge(preserve = "single")
+  theme_minimal() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  labs(y = "LCC count")
+
+
+# Tissue bar plot
+p2 <- data %>%
+  filter(Disease_Name %in% signif_dis) %>% 
+  filter(padj < 0.05) %>% 
+  group_by(Tissue) %>% 
+  dplyr::summarise(n=n()) %>%
+  ggplot() +
+  aes(x = Tissue, weight = n) +
+  geom_bar(fill = "#122265") + # "#333366"
+  labs(y = "LCC count") +
+  theme_minimal() +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
+
+  coord_flip()
+
+# patchwork things together
+((p3 + plot_spacer() + plot_layout(widths = c(5,1))) / ((p1 + p2) + plot_layout(widths = c(5,1))))+ plot_layout(heights = c(1,6))
+
+```
+

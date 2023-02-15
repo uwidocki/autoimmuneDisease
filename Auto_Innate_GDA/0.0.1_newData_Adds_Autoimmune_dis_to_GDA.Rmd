@@ -1,0 +1,108 @@
+---
+title: "0.0.1_newData_Adds_Autoimmune_dis_to_GDA"
+author: "Ursula Widocki"
+date: "4/3/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+`%ni%` <- Negate(`%in%`)
+```
+
+```{r}
+GDA_data = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_Complete_04042022.csv")
+
+final_auto_list <- c(read_tsv(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/autoimmune_disease_naming_scheme.txt", 
+                                col_names = F, col_types = cols())) %>% unlist()
+```
+
+```{r}
+# Use this chunk to look at which diseases are present in the dataset
+GDA_data %>% 
+  filter(NewName == final_auto_list[72]) # chronic urticaria is not present, change name of scleroderma
+```
+
+```{r}
+# combine types of scleroderma
+
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma diffuse", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma systemic", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma limited", 
+                           replacement = "scleroderma", fixed = TRUE)
+
+# combines types of ophthalmoplegia
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "ophthalmoplegia chronic progressive external", 
+                           replacement = "ophthalmoplegia", fixed = TRUE)
+
+# autoimmune thyroiditis is also Hashimoto disease
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "thyroiditis autoimmune", 
+                           replacement = "hashimoto disease", fixed = TRUE)
+
+GDA_data$NewName = unlist(GDA_data$NewName)
+
+```
+
+```{r}
+# Adds columns marking if autoimmune
+dis_all = unique(GDA_data$NewName)
+
+sum(final_auto_list %in% dis_all)
+
+GDA_data$isAutoimmune = ifelse(GDA_data$NewName %in% final_auto_list, 1, 0)
+```
+
+```{r}
+write.table(GDA_data, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new.tsv", sep = "\t", row.names = T, col.names = T)
+```
+
+```{r}
+# Look at the number of genes per disease
+disease_gene_assoc = GDA_data %>%
+  filter(NewName %in% final_auto_list) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  #filter(hgnc_symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  filter(isAutoimmune == 1) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique() %>%
+  group_by(NewName) %>%
+  summarize(n = n())
+rownames(disease_gene_assoc) = disease_gene_assoc$NewName
+
+# Examine number of disease genes per autoimmune disease
+disease_gene_assoc %<>%
+  arrange((n))
+disease_gene_assoc$NewName = factor(row.names(disease_gene_assoc), levels = row.names(disease_gene_assoc))
+ggplot(disease_gene_assoc) +
+  aes(x = NewName, y = n) +
+  geom_point(shape = "circle", fill = "tomato1", color = "tomato1", alpha = 0.4) +
+  labs(title = "Number of Disease Genes per Autoimmune Disease", x = "Autoimmune Disease", y = "Number of Disease Genes") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

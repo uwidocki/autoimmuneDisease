@@ -1,0 +1,188 @@
+---
+title: "Testing_Immunity_Neighborhoods"
+author: "Ursula Widocki"
+date: "6/9/2021"
+output: html_document
+---
+```{r}
+library(shiny)
+library(shinydashboard)
+library(plotly)
+library(UpSetR)
+require(data.table)
+require(scales)
+require(dplyr)
+require(ggplot2)
+require(magrittr)
+require(tidyr)
+require(tibble)
+library(plotly)
+require(igraph)
+`%ni%` <- Negate(`%in%`)
+```
+
+```{r}
+GDA = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Data_Clean_Complete.csv")
+x = GDA %>% select(NewName, DescriptorName)
+tmp = x$DescriptorName %>% 
+  stringr::str_split("\\|", simplify = TRUE) %>%
+  as.data.frame()
+x = cbind(x, tmp) %>%
+  pivot_longer(-NewName) %>% 
+  filter(value != "") %>%
+  filter(name != "DescriptorName") %>% 
+  select(-name) %>%
+  unique()
+
+n = x %>% 
+  filter(value %in% c("Immune System Diseases" , "Infections" )) %>%
+  group_by(value) %>%
+  mutate(n = n()) %>%
+  ungroup() %>% 
+  group_by(NewName) %>% 
+  mutate(x = max(n)) %>%
+  # filter(value %in% c("Immune System Diseases" , "Infections" )) %>%
+  filter(n == x) %>%
+  select(-c(n,x)) 
+
+
+n
+###
+###
+```
+
+```{r}
+PPI = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv")
+PPI %<>% select(starts_with("Symbol")) %>%
+  filter(Symbol_A != "") %>%
+  filter(Symbol_B != "")
+gPPI = PPI %>% 
+  select(starts_with('Symbol')) %>%
+  graph_from_data_frame(., directed = F) %>%
+  simplify()
+
+adapt = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/adaptive_genes_all.tsv", header = T, sep = "\t", stringsAsFactors = F)
+innate = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/adaptive_genes_all.tsv", header = T, sep = "\t", stringsAsFactors = F)
+```
+
+```{r}
+Selected_Diseases = GDA %>%
+  filter(NewName %in% n$NewName) %>% 
+  filter(Strong > 0 | 
+           Weak > 0 |
+           Incompatible > 0) %>%
+  filter(hgnc_symbol %in% V(gPPI)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 2) %>%
+  select(NewName, hgnc_symbol) %>%
+  unique()
+
+adapt = data.frame(NewName = "Adaptative", 
+                   hgnc_symbol = adapt$Symbol)
+
+innate = data.frame(NewName = "Innate", 
+                   hgnc_symbol = innate$Symbol)
+```
+
+```{r}
+Full = bind_rows(Selected_Diseases, adapt, innate)
+Full %<>% filter(hgnc_symbol %in% V(gPPI)$name)
+
+x = Full %>% group_by(NewName) %>%
+  mutate(n = n()) %>%
+  filter(n > 5) %>%
+  select(-n)
+
+require(NetSci)
+SAB = separation(G = gPPI, 
+           ST = x)
+#SAB
+Sep= SAB$Sab %>% as.matrix()
+
+Sep[lower.tri(Sep)] = t(Sep)[lower.tri(Sep)]
+S = Sep %>% as.matrix() %>% reshape2::melt()
+S %<>% filter(value < 0)
+
+S$Var1 %<>% as.character()
+S$Var2 %<>% as.character()
+n1 = apply(S[,1:2], 1, min)
+n2 = apply(S[,1:2], 1, max)
+S$Var1 = n1
+S$Var2 = n2
+
+g = S %>%
+  unique() %>%
+  graph_from_data_frame(., directed = F) %>%
+  delete.vertices(., degree(.) == 0 )
+
+V(g)$degree = degree(g)
+V(g)$type = ifelse(V(g)$name %in% c("Innate", "Adaptative"), "Main Immunity", "Diseases")
+require(ggraph)
+E(g)$weight = abs(E(g)$value)
+
+ggraph(g, 'fr') +
+  geom_node_point(aes(size = degree, 
+                      color = type)) +
+  geom_node_text(aes(label = name,
+                     filter = degree > 1),
+                 color = '#FFA92D',
+                 size = 3) +
+  geom_edge_link(aes(width = weight,
+                     alpha = weight)) +
+  scale_edge_width(range = c(0.5, 3))+
+  theme_void()
+
+```
+
+```{r}
+## filter for adaptative / innate
+
+disease_close = neighborhood(g, 
+             order = 2, 
+             nodes = c("Innate", "Adaptative")) %>%
+  unlist() %>%
+  names() %>%
+  unique()
+
+
+g %>%
+  delete.vertices(V(g)$name %ni% disease_close) %>% 
+  ggraph(., 'fr') +
+  geom_node_point(aes(size = degree, 
+                      color = type)) +
+  geom_node_text(aes(label = name,
+                     filter = degree > 1),
+                 color = '#FFA92D',
+                 size = 3) +
+  geom_edge_link(aes(width = weight,
+                     alpha = weight)) +
+  scale_edge_width(range = c(0.5, 3))+
+  theme_void()
+
+```
+
+```{r}
+ggraph(g, 'fr') +
+  geom_node_point(aes(size = degree, 
+                      color = type)) +
+  geom_node_text(aes(label = name,
+                     filter = degree > 6),
+                 color = '#FFA92D',
+                 size = 3) +
+  geom_edge_link(aes(width = weight,
+                     alpha = weight)) +
+  scale_edge_width(range = c(0.5, 3))+
+  theme_void()
+```
+
+
+
+
+
+
+
+
+
+
+
