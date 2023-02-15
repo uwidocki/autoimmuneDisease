@@ -1,0 +1,179 @@
+---
+title: "ReactomeDB_immune_gene_curation"
+author: "Ursula Widocki"
+date: "12/9/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+
+rm(list = ls())
+
+```
+
+
+```{r}
+
+# Manual: http://bioconductor.org/packages/release/data/annotation/manuals/reactome.db/man/reactome.db.pdf
+# How to: https://bioc.ism.ac.jp/packages/2.8/data/annotation/vignettes/reactome.db/inst/doc/reactome.pdf
+
+
+library(reactome.db)
+library(tidyverse)
+
+```
+
+## List of ReactomeDB pathways I know I need 
+# as written on the website interface
+
+#### "TCR signaling"
+"Homo sapiens: TCR signaling"
+
+#### "Costimulation by the CD28 family"
+"Homo sapiens: Costimulation by the CD28 family"
+
+#### "Signaling by the B Cell Receptor (BCR)"
+"Homo sapiens: Signaling by the B Cell Receptor (BCR)"
+
+#### "Class I MHC mediated antigen processing and presentation"
+"Homo sapiens: Class I MHC mediated antigen processing and presentation"
+
+#### "MHC class II antigen presentation"
+"Homo sapiens: MHC class II antigen presentation"
+
+#### "Immunoregulatory interactions between a Lymphoid and a non-Lymphoid cell"
+"Homo sapiens: Immunoregulatory interactions between a Lymphoid and a non-Lymphoid cell"
+
+#### "Rap1 signaling"
+"Homo sapiens: Rap1 signaling"
+
+#### "Butyrophilin (BTN) family interactions"
+"Homo sapiens: Butyrophilin (BTN) family interactions"
+
+#### "Interferon Signaling"
+"Homo sapiens: Interferon Signaling"
+
+#### "Signaling by Interleukins"
+"Homo sapiens: Signaling by Interleukins"
+
+#### "Prolactin receptor signaling"
+"Homo sapiens: Prolactin receptor signaling"
+
+#### "TNFR2 non-canonical FN-kB pathway"
+"Homo sapiens: TNFR2 non-canonical NF-kB pathway"
+
+#### "FLT3 Signaling"
+"Homo sapiens: FLT3 Signaling"
+
+"Homo sapiens: Signaling by CSF3 (G-CSF)"
+
+
+```{r}
+## List of all pathways I need
+
+paths <- c("Homo sapiens: TCR signaling","Homo sapiens: Costimulation by the CD28 family","Homo sapiens: Signaling by the B Cell Receptor (BCR)","Homo sapiens: Class I MHC mediated antigen processing and presentation","Homo sapiens: MHC class II antigen presentation","Homo sapiens: Immunoregulatory interactions between a Lymphoid and a non-Lymphoid cell","Homo sapiens: Rap1 signaling","Homo sapiens: Butyrophilin (BTN) family interactions", "Homo sapiens: Interferon Signaling", "Homo sapiens: Signaling by Interleukins", "Homo sapiens: Prolactin receptor signaling", "Homo sapiens: TNFR2 non-canonical NF-kB pathway", "Homo sapiens: FLT3 Signaling", "Homo sapiens: Signaling by CSF3 (G-CSF)")
+
+```
+
+```{r}
+## Read in information in ReactomeDB that we need
+
+reactomeIDs <- reactomePATHNAME2ID # maps Reactome path identifiers to reactomeIDs
+entrezGenes <- reactomePATHID2EXTID # maps reactome IDs to Entrez gene names
+entrez_to_ID <- reactomeEXTID2PATHID
+path_ID_to_name <- reactomePATHID2NAME
+
+#xx <- as.list(reactomeGO2REACTOMEID)
+#all_reactomeIds <- ls(reactomePATHID2EXTID)
+
+test <- ls(reactomePATHNAME2ID) # when printed, shows all of the pathway names in database
+#test[10004:11000] # Homo sapiens starts at 10004
+
+```
+
+Using the pathway names, we first get the reactome IDs and then path IDs to get the Entrez gene IDs of the genes involved in the innate immune system and cytokine signaling pathways above.
+
+```{r}
+# Get all Reactome IDs for all of the paths
+path_IDs <- c()
+for (path in paths){
+  path_IDs <- append(path_IDs, reactomeIDs[[path]])
+  
+}
+
+# set up df to store genes and paths
+col_labels <- c("Symbol", "ReactomePathName", "ReactomePathID", "ReactomeDB")
+reactome_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(reactome_df) <- col_labels
+
+# to add gene symbols
+gene_human <- read_csv("/Users/ursulawidocki/Desktop/BarabasiLab/Data/gene_human.csv")
+gene_human <- gene_human[,2:3]
+
+for (ID in path_IDs){
+  
+  reactome_genes = entrezGenes[[ID]] # gets all Entrez genes in paths
+  
+  for(g in reactome_genes){
+    
+    if(g %in% gene_human$GeneID){
+      sym_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+      name_path <- path_ID_to_name[[ID]]
+      new_line <- c(sym_gene, name_path, ID, "1")
+      reactome_df[nrow(reactome_df) + 1,] <- new_line
+      
+    }
+  }
+}
+
+```
+
+```{r}
+## Saves the df to integrate information later
+
+write.csv(reactome_df,'/Users/ursulawidocki/Desktop/BarabasiLab/Data/reactome_adaptive_genes.csv', col.names = TRUE)
+
+```
+
+
+
+
+
+
+
+
+
+
+################## Code I didn't use
+
+```{r}
+reactome_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Virome/Data/reactome_genes.csv', header = T, sep = ",")
+reactome_df <- reactome_df[,2:5]
+```
+
+
+```{r}
+# get total number of genes
+
+genes_list <- c(reactome_df$EntrezID)
+
+length(unique(genes_list)) # 1668 unique genes
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

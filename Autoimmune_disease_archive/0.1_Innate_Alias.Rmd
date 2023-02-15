@@ -1,0 +1,274 @@
+---
+title: "0.1_Innate_Alias"
+author: "Ursula Widocki"
+date: "6/15/2021"
+output: html_document
+---
+
+```{r}
+rm(list = ls())
+```
+
+
+```{r}
+library(tidyverse)
+library(igraph)
+
+require(data.table)
+require(tidyr)
+require(dplyr)
+require(magrittr)
+```
+
+
+####################################################################################################################
+# How do things change when we consider that some gene symbols have an alias
+
+
+```{r}
+alias_dict = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GeneSymbolToAliasANDPreviousNames.txt", 
+                        sep = "\t", stringsAsFactors = F, header = T) # read in alias dict
+
+
+#df = data.frame(GeneName = alias_dict$Symbol, Alias = alias_dict$Symbol) %>% unique()
+
+#alias_dict = bind_rows(alias_dict, df) %>% unique()
+innate_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/innate_genes_all.tsv", 
+                        sep = "\t", stringsAsFactors = F, header = T)
+
+```
+
+```{r}
+# Read in PPI data
+ppi <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+ppi_df <- ppi[,c("Symbol_A", "Symbol_B")]
+
+#ppi_df = ppi_df %>% filter(Symbol_A != "" | Symbol_B != "")
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+```
+
+### removing aliases that occur more than once
+```{r}
+# Count the number of times a Symbol occurs as a symbol and the number of times an Alias occurs as an alias
+gene_dic_filter = alias_dict %>% 
+  group_by(Symbol) %>%
+  mutate(n_symbol = n())%>%
+  ungroup() %>%
+  group_by(Alias) %>%
+  mutate(n_alias = n())
+
+# filter for most common alias symbols
+df1 = gene_dic_filter %>%
+  ungroup() %>%
+  filter(n_alias > 1) %>% # keep alias that occur more than once
+  group_by(Alias) %>%
+  mutate(max_symbol = max(n_symbol)) %>%
+  filter(n_symbol == max_symbol) %>% # keep which symbol occurs the most
+  unique() %>%
+  dplyr::select(Symbol, Alias) %>%
+  group_by(Alias) %>%
+  mutate(n = n()) %>%
+  filter(n == 1) %>%
+  unique()
+```
+
+
+### Looking at the alias mapping as a network ###
+
+```{r}
+# make Alias Network
+
+g_alias = graph_from_data_frame(alias_dict, directed = F)
+#components(g_alias) # there are 123846 components, so this many genes total
+
+# make df of symbols and alias and the component they are in
+alias_g_membership = data.frame(components(g_alias)$membership)
+alias_g_membership$symb = rownames(alias_g_membership)
+colnames(alias_g_membership)[1] = "component"
+
+```
+
+```{r}
+# get all of the names in component 22577 (H3C3/ H3C11 case)
+
+H3C3_comp_names = alias_g_membership[alias_g_membership$component == 22577,]
+
+# which of these are in the PPI
+
+PPI_nodes = names(V(ppi_g))
+
+sub_H3C3 = H3C3_comp_names[which(H3C3_comp_names$symb %in% PPI_nodes),]
+
+# do these make a subgraph?
+
+sub_H3C3 = subgraph(ppi_g, sub_H3C3$symb)
+
+components(sub_H3C3)
+
+```
+
+```{r}
+# Remove alias mappings where both names are in the PPI
+rows_to_remove = c()
+for(i in 1:dim(alias_dict)[1]){
+  gene1 = alias_dict[i,"Symbol"]
+  gene2 = alias_dict[i,"Alias"]
+  
+  if(gene1 %in% PPI_nodes & gene2 %in% PPI_nodes){
+    print("PAIR")
+    rows_to_remove = c(rows_to_remove, i)
+  }
+  
+}
+
+alias_dict2 = alias_dict[-(rows_to_remove),]
+
+```
+
+```{r}
+# Making a second graph of the alias mapping
+g2_alias = graph_from_data_frame(alias_dict2, directed = F)
+
+#components(g2_alias)$membership
+# make df of symbols and alias and the component they are in
+alias_g2_membership = data.frame(components(g2_alias)$membership)
+alias_g2_membership$symb = rownames(alias_g2_membership)
+colnames(alias_g2_membership)[1] = "component"
+
+# look at component 22634
+H3C3_comp_names2 = alias_g2_membership[alias_g2_membership$component == 22634,]
+#sub2_H3C3 = H3C3_comp_names2[which(H3C3_comp_names2$symb %in% PPI_nodes),] # in H3C3 comp and PPI 
+sub2_H3C3 = subgraph(g2_alias, H3C3_comp_names2$symb)
+
+# viz to see what is going on
+#coord = layout_with_drl(sub2_H3C3, weights = E(sub2_H3C3)$weight^5)
+coord = layout_with_drl(sub2_H3C3) * 10
+#coords <- layout.fruchterman.reingold(sub2_H3C3) * 8 #*0.5
+plot(sub2_H3C3, layout = coord)
+
+```
+
+
+```{r}
+# Remake alias network mapping components 
+# now investigate if (hopefully) only one node in each component is in the PPI
+
+
+```
+
+
+library(limma)
+library(org.Hs.eg.db)
+https://rdrr.io/bioc/limma/man/alias2Symbol.html
+#alias2SymbolTable("Histone H3/a", species = "Hs")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+###########################################################################################################
+# Code I didn't use
+
+```{r}
+# make gene_in_each long
+temp = innate_data[,c("Symbol", "GO", "KEGG", "InnateDB", "ReactomeDB")] %>% unique() # add pathways later
+
+temp$GO = ifelse(is.na(temp$GO), 0, 1)
+temp$KEGG = ifelse(is.na(temp$KEGG), 0, 1)
+temp$ReactomeDB = ifelse(is.na(temp$ReactomeDB), 0, 1)
+temp$InnateDB = ifelse(is.na(temp$InnateDB), 0, 1)
+
+all_genes_long = pivot_longer(temp, 
+                              cols = c("GO", "KEGG", "InnateDB", "ReactomeDB"), 
+                              )
+
+# merge alias_dict
+temp = dplyr::left_join(all_genes_long, alias_dict, 
+                        by = c("Symbol" = "Alias"))
+
+# remove column with old gene names
+temp_subset = temp[,c("GeneName", "value", "name")] %>% unique()
+
+new_map = temp_subset %>% pivot_wider(., names_from = name, 
+                            values_from = value, 
+                            values_fn = sum, 
+                            values_fill = 0)
+```
+
+```{r}
+g = graph_from_data_frame(alias_dict, directed = F)
+adj_map = get.edgelist(g)
+adj_uni = unique(adj_map)
+```
+
+
+
+
+
+# Here is another way tried
+
+```{r}
+# Count the number of times a Symbol occurs as a symbol and the number of times an Alias occurs as an alias
+gene_dic_filter = alias_dict %>% 
+  group_by(Symbol) %>%
+  mutate(n_symbol = n())%>%
+  ungroup() %>%
+  group_by(Alias) %>%
+  mutate(n_alias = n())
+
+# filter for most common alias symbols
+df1 = gene_dic_filter %>%
+  ungroup() %>%
+  filter(n_alias > 1) %>% # keep alias that occur more than once
+  group_by(Alias) %>%
+  mutate(max_symbol = max(n_symbol)) %>%
+  filter(n_symbol == max_symbol) %>% # keep which symbol occurs the most
+  unique() %>%
+  dplyr::select(Symbol, Alias) %>%
+  group_by(Alias) %>%
+  mutate(n = n()) %>%
+  filter(n == 1) %>%
+  unique()
+
+# filter for aliases that occur only once
+df2 = gene_dic_filter %>%
+  ungroup() %>%
+  filter(n_alias == 1) %>%
+  dplyr::select(Symbol, Alias) %>%
+  unique()
+
+dict = bind_rows(df1, df2) %>%
+  unique()
+
+dict %>%
+  group_by(Alias) %>%
+  mutate(n = n()) %>%
+  filter(n > 1)
+
+```

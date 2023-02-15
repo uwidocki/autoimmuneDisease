@@ -1,0 +1,95 @@
+---
+title: "Scrape_Autoimmune_Diseases"
+author: "Ursula Widocki"
+date: "5/27/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list=ls())
+
+url <- "https://www.aarda.org/diseaselist/"
+```
+
+```{r}
+library(XML)
+
+read_page <- readLines(con = url, skipNul = T, encoding = "UTF-8")
+parsed_page <- htmlParse(read_page, isHTML = T)
+```
+
+```{r}
+library(XML)
+
+url <- "https://www.aarda.org/diseaselist/"
+xml_document_stuff = read_html(url)
+doc <- htmlParse(xml_document_stuff)
+
+```
+
+# lets try something different
+
+```{r}
+library(rvest) # part of tidyverse
+
+simple <- read_html(url)
+simple_parse <- htmlParse(simple)
+```
+```{r}
+simple
+```
+
+```{r}
+simple %>%
+html_nodes("p") %>%
+html_text()
+```
+
+```{r}
+
+#Data = data.frame(Pages=c("https://www.aarda.org/diseaselist/"))
+simple <- read_html(url)
+        html_nodes(xpath = '//meta[@itemprop="og:description"]') %>% 
+        html_attr('content')
+
+```
+
+# Let's try to get immune diseases, now
+```{r}
+# read in text file of the text book
+
+# parse through immune system chapter
+
+# visually go through all immune diseases
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

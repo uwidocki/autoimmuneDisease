@@ -1,0 +1,92 @@
+---
+title: "0_KEGG_innate_curation"
+author: "Ursula Widocki"
+date: "6/16/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+http://bioconductor.org/packages/release/bioc/html/KEGGREST.html
+
+
+```{r}
+library("tidyverse")
+library("KEGGREST")
+
+```
+
+listDatabases() = lists databases available
+keggList() = list of organisms and codes
+keggInfo(<database>) = displays categories of a database
+browseVignettes("KEGGREST")
+
+```{r}
+database = "pathway"
+# what is the "module" database
+
+#keggFind(database, "immune")
+
+```
+
+```{r}
+my_KEGG_paths <- c("hsa04062", "hsa04610","hsa04611", "hsa04612", "hsa04613","hsa04620", " hsa04621", "hsa04622", "hsa04623", "hsa04625", "hsa04640", "hsa04650", "hsa04657", "hsa04664", "hsa04670", "hsa04672")
+
+# keggGet can only get 10 inputs due to server limitations
+query1 <- keggGet(my_KEGG_paths[1:10])
+
+query2 <-keggGet(my_KEGG_paths[11:length(my_KEGG_paths)])
+
+```
+
+```{r}
+col_labels <- c("Symbol", "KEGG", "KEGGpathID", "KEGGpathName")
+kegg_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(kegg_df) <- col_labels
+
+for(p in 1:length(query1)){ # for each path in the query
+  pathname = query1[[p]]$NAME # get path name
+  pathID = query1[[p]]$ENTRY # get path id
+  
+  pathgenes = query1[[p]]$GENE # gets list of genes in query p
+  gene_extract = sub(";.*", "", pathgenes)
+  gene = gene_extract[seq(2,length(gene_extract), 2)] # gene symbols in path p
+  
+  for(g in gene){ # for each gene, add line of its pathway and info
+    new_line <- c(g, 1, pathID, pathname)
+    kegg_df[nrow(kegg_df)+1,] <- new_line
+    
+  }
+}
+
+for(p in 1:length(query2)){
+  pathname = query2[[p]]$NAME
+  pathID = query2[[p]]$ENTRY
+  
+  pathgenes = query2[[p]]$GENE
+  gene_extract = sub(";.*", "", pathgenes)
+  gene = gene_extract[seq(2,length(gene_extract), 2)]
+  
+  for(g in gene){
+    new_line <- c(g, 1, pathID, pathname)
+    kegg_df[nrow(kegg_df)+1,] <- new_line
+    
+  }
+}
+
+```
+
+```{r}
+# save data
+
+write.csv(kegg_df,'/Users/ursulawidocki/Desktop/BarabasiLab/Data/kegg_innate_genes.csv')
+
+```
+
+
+
+
+
+

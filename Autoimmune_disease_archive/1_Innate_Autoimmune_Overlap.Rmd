@@ -1,0 +1,1667 @@
+---
+title: "1_Innate_Autoimmune_Overlap"
+author: "Ursula Widocki"
+date: "5/11/2021"
+output: html_document
+---
+#################################################################################################
+# Original autoimmune disease module-looking-at-things file
+# 
+#
+# 
+#################################################################################################
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+library(MeSH.db)
+library(MeSH.AOR.db)
+library(eulerr)
+library(gprofiler2) # gene enrichment
+#library(stringdist)
+library(dplyr)
+library(stringr)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+
+set.seed(123) # for venn diagrams
+
+```
+
+# Read in data and set up their objects
+```{r}
+GDA_data <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/GDA_18122020_ClassFromDisGeNet.csv", sep = ",", header = T, stringsAsFactors = F)
+
+GDA_data = GDA_data %>% filter(Strong > 0 | Weak > 0) %>% mutate(DiseaseName = tolower(DiseaseName)) %>% unique()
+
+all_genes_df <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/all_genes.tsv", header = T, sep = "\t", stringsAsFactors = F)
+
+ppi_df <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df <- ppi_df[,c("Symbol_A", "Symbol_B")]
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g = ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+### How are innate immunity genes associated with genes involved with autoimmune diseases
+
+# Get MeSH terms
+```{r}
+## Filter by Immune System Disease
+
+autoimmune_key <- "D001327"
+
+# gets meshids of autoimmune diseases
+auto_dis_ids <- MeSHDbi::select(MeSH.AOR.db, keys = autoimmune_key, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+auto_dis_ids_2 <- MeSHDbi::select(MeSH.AOR.db, keys = auto_dis_ids$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+auto_dis_ids_3 <- MeSHDbi::select(MeSH.AOR.db, keys = auto_dis_ids_2$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+auto_dis_ids_4 <- MeSHDbi::select(MeSH.AOR.db, keys = auto_dis_ids_3$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+auto_dis_ids_5 <- MeSHDbi::select(MeSH.AOR.db, keys = auto_dis_ids_4$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR") # 0, so last one to get offspring terms
+
+all_terms <- rbind(auto_dis_ids,auto_dis_ids_2) %>% rbind(., auto_dis_ids_3) %>% rbind(., auto_dis_ids_4)
+
+# add MeSH ID for Chrohn: D003424 and IBD: D015212 since they are autoimmune disorders
+#all_terms <- rbind(all_terms, data.frame(ANCESTOR = "D003424", OFFSPRING = "D015212"))
+
+```
+
+```{r}
+# Gets names of autoimmune diseases
+parent_names <- MeSHDbi::select(MeSH.db, keys = all_terms$ANCESTOR, columns = c("MESHTERM"), keytype = "MESHID")
+offspring_names <- MeSHDbi::select(MeSH.db, keys = all_terms$OFFSPRING, columns = c("MESHTERM"), keytype = "MESHID")
+
+# make df of all names of autoimmune diseases
+all_terms <- rbind(parent_names, offspring_names) %>% mutate(MESHTERM = tolower(MESHTERM)) %>% unique()
+
+```
+
+```{r}
+# Gets synonyms
+
+raw_terms = rbind(parent_names, offspring_names)
+
+# get synonyms
+syns <- MeSHDbi::select(MeSH.db, keys = raw_terms$MESHTERM, columns = c("MESHTERM", "SYNONYM"), keytype = "MESHTERM")
+
+all_syns <- syns %>% mutate(MESHTERM = tolower(MESHTERM)) %>% mutate(SYNONYM = tolower(SYNONYM))
+
+syn_df = all_syns$SYNONYM %>% as.data.frame(., stringsAsFactors = F)
+syn_list = c()
+for(i in seq(1:dim(syn_df)[1])){
+ syn_list = c(syn_list, strsplit(syn_df[i,1],  "\\|"))
+}
+
+syn_list = unlist(syn_list) %>% unique()
+
+```
+
+```{r}
+# Get GDA with autoimmune diseases
+# Make a df with Meshterms and their GDA name equivalent
+# Made from observation
+
+GDA_disease = c("anemia hemolytic","arthritis juvenile", "rheumatoid arthritis", "autoimmune diseases", "lymphoproliferative syndrome", "encephalomyelitis autoimmune", "giant cell arteritis","glomerulonephritis iga" , "glomerulonephritis membranous", "graves disease", "graves ophthalmopathy", "hashimoto disease", "hepatitis autoimmune", "leukoencephalopathies", "systemic lupus erythematosus", "multiple sclerosis", "myasthenia gravis", "neuromyelitis optica", "sjögren syndrome", "thyroiditis autoimmune", "vasculitis", "inflammatory bowel disease", "crohn disease", "psoriasis")
+
+
+GDA_auto = GDA_data[GDA_data$DiseaseName %in% GDA_disease, c("hgnc_symbol", "DiseaseName")]
+colnames(GDA_auto)[1] <- "Symbol"
+
+```
+
+# Remove root nodes and experimental models from 
+
+remove = c("autoimmune diseases of the nervous system", "demyelinating autoimmune diseases, cns", "nervous system autoimmune disease, experimental", "vasculitis, central nervous system", "anti-neutrophil cytoplasmic antibody-associated vasculitis", "myasthenia gravis, autoimmune, experimental")
+
+```{r}
+# https://www.aarda.org/diseaselist/ <- NIH links to this site
+
+aarda_disease_list = c("autoimmune diseases", "esophageal achalasia", "idiopathic achalasia", "agammaglobulinemia", "alopecia", "amyloidosis visceral", "spondylitis ankylosing", "glomerulonephritis", "glomerulonephritis iga", "glomerulonephritis membranous", "encephalomyelitis autoimmune", "hepatitis autoimmune", "autoimmune thyroid disease")
+
+# https://www.autoimmuneinstitute.org/resources/autoimmune-disease-list/
+
+```
+
+
+
+# Examining the overlap of gene sets
+
+## Venn Diagrams
+
+# What is the general overlap of genes in our innate and autoimmune diseases data set?
+```{r}
+# Make a venn diagram to look at the overlap
+autos <- GDA_auto$Symbol %>% unique()
+innates <- as.character(all_genes_df$Symbol) %>% unique()
+
+euler(list(autoimmuneDiseases = autos, innateImmunity = innates)) %>% plot(., quantities = T)
+
+```
+
+```{r}
+
+hypergeom_test = function(success, universe_success, universe_failure, size_collected){
+  phyper(q = success, m = universe_success, n = universe_failure, k = size_collected, lower.tail = TRUE, log.p = FALSE)
+}
+```
+
+
+```{r}
+# How signif. is this overlap?
+
+genes_i <- autos
+genes_j <- innates
+all <- unique(c(genes_i, genes_j))
+    
+universe_success <- intersect(genes_i, genes_j)
+q <- length(universe_success) / length(all)
+universe_failure <- all[!(all %in% universe_success)]
+size_collected <- length(all)
+    
+hypergeom_test(success = q, universe_success = length(universe_success), universe_failure = length(universe_failure), size_collected = size_collected)
+
+```
+
+
+# Given our PPI data, how does this overlap change?
+```{r}
+ppi_auto <- autos[autos %in% V(ppi_g)$name]
+ppi_innate = innates[innates %in% V(ppi_g)$name]
+
+euler(list(autoimmuneDiseases = ppi_auto, innateImmunity = ppi_innate)) %>% plot(., quantities = T)
+
+```
+
+```{r}
+# How signif. is this overlap?
+
+genes_i <- ppi_auto
+genes_j <- ppi_innate
+all <- unique(c(genes_i, genes_j))
+    
+universe_success <- intersect(genes_i, genes_j)
+q <- length(universe_success) / length(all)
+universe_failure <- all[!(all %in% universe_success)]
+size_collected <- length(all)
+    
+hypergeom_test(q, length(universe_success), length(universe_failure), size_collected)
+
+```
+
+
+
+
+
+# Do to autoimmune diseases genes form a significant LCC?
+```{r}
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+
+LCC_all_auto = LCC_signif(G = ppi_g, targets = ppi_auto, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_all_auto$size, LCC_all_auto$distribution)
+hist(LCC_all_auto$distribution, main = "All Autoimmune Diseases LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_all_auto$size, col = "red")
+```
+
+```{r}
+# Degrees of Genes in LCC and not in LCC
+
+# first make the subgraph
+auto_graph <- induced_subgraph(ppi_g, ppi_auto)
+temp <- components(auto_graph)$membership 
+inLCC_auto = names(temp[temp == 1])
+nonLCC_auto = names(temp[temp != 1])
+
+# plot non LCC degrees
+not_auto_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_auto)
+
+not_LCC_auto_df <- not_auto_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_auto_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in Autoimmune Diseases LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_auto_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_auto) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_auto_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Autoimmune Diseases LCC") +
+  theme_minimal()
+
+```
+
+```{r}
+# is there one connected component?
+components(auto_graph)
+
+```
+
+```{r}
+# Check out the innate immunity LCC, just in case
+innate_graph <- induced_subgraph(ppi_g, ppi_innate)
+temp <- components(innate_graph)$membership
+inLCC_innate = names(temp[temp == 1])
+
+LCC_innate = LCC_signif(G = ppi_g, targets = ppi_innate, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_innate$size, LCC_innate$distribution)
+hist(LCC_innate$distribution, main = "Innate Immunity LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_innate$size, col = "red")
+```
+
+
+
+
+# How do the LCCs of innate immunity and autoimmune disease module overlap?
+
+```{r}
+euler(list(autoimmuneDiseaseLCC = inLCC_auto, innateImmunityLCC = inLCC_innate)) %>% plot(., quantities = T)
+
+```
+
+```{r}
+genes_i <- inLCC_auto
+genes_j <- inLCC_innate
+all <- unique(c(genes_i, genes_j))
+    
+universe_success <- intersect(genes_i, genes_j)
+q <- length(universe_success) / length(all)
+universe_failure <- all[!(all %in% universe_success)]
+size_collected <- length(all)
+    
+hypergeom_test(q, length(universe_success), length(universe_failure), size_collected)
+```
+
+# Does the intersect of Autoimmune Diseases and Innate Immunity form an LCC?
+```{r}
+# Intersect LCC
+
+genes_intersect = inLCC_auto[inLCC_auto %in% inLCC_innate] # 403
+#length(unique(genes_intersect))
+
+LCC_inter = LCC_signif(G = ppi_g, targets = genes_intersect, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_inter$size, LCC_inter$distribution)
+hist(LCC_inter$distribution, main = "Intersect of Innate and Autoimmune Disease LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_inter$size, col = "red")
+
+```
+
+```{r}
+# Degrees of Genes in LCC and not in LCC
+
+# first make the subgraph
+inter_graph <- induced_subgraph(ppi_g, genes_intersect)
+temp <- components(inter_graph)$membership 
+inLCC_inter = names(temp[temp == 1])
+nonLCC_inter = names(temp[temp != 1])
+
+# plot non LCC degrees
+not_inter_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_inter)
+
+not_LCC_inter_df <- not_inter_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_inter_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Intersection but Not in Auto-Innate LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_inter_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_inter) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_inter_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Intersection of Auto-Innate LCC") +
+  theme_minimal()
+```
+# Enrichment of this Intersection LCC
+
+```{r}
+# domain_scope = "custom" or "custom_annotated"
+# custom_bg = # parameter for custom background set
+
+query_genes = inLCC_inter
+background_genes = unique(GDA_auto$Symbol)
+
+# Uses all databases available: GO, Ensembl, KEGG, and Reactome
+# Correction Method: fdr
+
+enrich_inter <- gost(query = query_genes, 
+                organism = "hsapiens", ordered_query = FALSE, 
+                multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                measure_underrepresentation = FALSE, evcodes = FALSE, 
+                user_threshold = 0.05, correction_method = "fdr", 
+                domain_scope = "custom", custom_bg = background_genes, 
+                numeric_ns = "", sources = NULL, as_short_link = FALSE)
+
+enrich_inter_df <- enrich_inter$result %>% mutate(term_name = tolower(term_name))
+
+```
+
+```{r}
+# Looking through term names
+
+# interferon, cytokines
+
+
+look_here = enrich_inter_df[!grepl("interferon", enrich_inter_df$term_name),]
+look_here = look_here[!grepl("cytokine", look_here$term_name), ]
+look_here = look_here[!grepl("inflammatory", look_here$term_name), ]
+look_here = look_here[!grepl("adaptive", look_here$term_name), ]
+look_here = look_here[!grepl("il-", look_here$term_name), ]
+look_here = look_here[!grepl("leukocyte", look_here$term_name), ]
+look_here = look_here[!grepl("interleukin", look_here$term_name), ]
+look_here = look_here[!grepl("t cell", look_here$term_name), ]
+look_here = look_here[!grepl("b cell", look_here$term_name), ]
+look_here = look_here[!grepl("lymphocyte", look_here$term_name), ]
+look_here = look_here[!grepl("innate", look_here$term_name), ]
+look_here = look_here[!grepl("complement", look_here$term_name), ]
+look_here = look_here[!grepl("c-type lectin receptor", look_here$term_name), ]
+look_here = look_here[!grepl("immune system", look_here$term_name), ]
+
+#
+```
+
+```{r}
+# Look at intersect LCC gene names
+
+sort(inLCC_inter)
+
+```
+
+```{r}
+# Which diseases have genes in the intersect?
+
+inter_autodisease = GDA_auto[GDA_auto$Symbol %in% inLCC_inter, "DiseaseName"] %>% unique()
+
+inter_alldisease = GDA_data[GDA_data$hgnc_symbol %in% inLCC_inter, "DiseaseName"] %>% unique()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+# Looking at LCCs and separation between disease modules
+
+```{r}
+# for each autoimmune disease found in GDA
+
+keep_disease = c()
+
+for(dis in GDA_disease){
+  # get genes of disease
+  genes_df = subset(GDA_data, GDA_data$DiseaseName == dis)
+  genes <- genes_df[!duplicated(genes_df$hgnc_symbol), "hgnc_symbol"]
+  genes = genes[genes %in% V(ppi_g)$name]
+  
+  # assess LCC of disease
+  LCC_temp = LCC_signif(G = ppi_g, targets = genes, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+  if(LCC_temp$p_val < 0.05 & LCC_temp$size > 1){
+    print(dis)
+    keep_disease = c(keep_disease, dis)
+  }
+
+}
+  
+```
+
+```{r}
+# Separation of these diseases and innate immunity
+
+keep_dis = GDA_auto[GDA_auto$DiseaseName %in% keep_disease,]
+colnames(keep_dis) = c("Genes", "Label")
+
+# all autoimmunity genes
+genes_auto <- GDA_data$hgnc_symbol %>% unique() 
+genes_auto = genes_auto[genes_auto %in% V(ppi_g)$name]
+auto_df = genes_auto %>% as.data.frame()
+auto_df$Label <- "All Auto"
+colnames(auto_df)[1] = "Genes"
+
+# all innate immunity genes
+genes_all_innate <- all_genes_df$Symbol %>% unique() 
+genes_all_innate = genes_all_innate[genes_all_innate %in% V(ppi_g)$name]
+all_innate_df = genes_all_innate %>% as.data.frame()
+all_innate_df$Label <- "All Innate"
+colnames(all_innate_df)[1] = "Genes"
+
+# intersect
+inter_labels = inLCC_inter %>% as.data.frame()
+inter_labels$Label <- "Intersect"
+colnames(inter_labels)[1] = "Genes"
+
+# GO
+go_df <- subset(all_genes_df, all_genes_df$GO == "GO.DB")
+genes_go <- go_df[!duplicated(go_df$Symbol), "Symbol"] 
+genes_go = genes_go[genes_go %in% V(ppi_g)$name]
+go_df = genes_go %>% as.data.frame()
+go_df$Label <- "GO"
+colnames(go_df)[1] = "Genes"
+
+# InnateDB
+innate_df <- subset(all_genes_df, all_genes_df$InnateDB == "InnateDB")
+genes_innate <- innate_df[!duplicated(innate_df$Symbol), "Symbol"]
+genes_innate = genes_innate[genes_innate %in% V(ppi_g)$name]
+innate_df = genes_innate %>% as.data.frame()
+innate_df$Label <- "InnateDB"
+colnames(innate_df)[1] = "Genes"
+
+# KEGG
+kegg_df <- subset(all_genes_df, all_genes_df$KEGG == "KEGG.db")
+genes_kegg <- kegg_df[!duplicated(kegg_df$Symbol), "Symbol"]
+genes_kegg = genes_kegg[genes_kegg %in% V(ppi_g)$name]
+kegg_df = genes_kegg %>% as.data.frame()
+kegg_df$Label <- "KEGG"
+colnames(kegg_df)[1] = "Genes"
+
+# Reactome
+reactome_df <- subset(all_genes_df, all_genes_df$ReactomeDB == "ReactomeDB")
+genes_reactome <- reactome_df[!duplicated(reactome_df$Symbol), "Symbol"]
+genes_reactome = genes_reactome[genes_reactome %in% V(ppi_g)$name]
+reactome_df = genes_reactome %>% as.data.frame()
+reactome_df$Label <- "Reactome"
+colnames(reactome_df)[1] = "Genes"
+
+# Bind the gene and labels together
+sep_labels = rbind(keep_dis, auto_df) %>% rbind(., all_innate_df) %>% rbind(., go_df) %>% rbind(., innate_df) %>% rbind(., kegg_df) %>% rbind(., reactome_df) %>% rbind(.,inter_labels)
+
+# Calc. Sep.
+all_sep = module_sep(ppi_g, sep_labels)
+
+sab_all = all_sep$Sab
+sab_all[is.na(sab_all)] <- 0 # make NA 0
+sab_all = sab_all + t(sab_all)
+
+superheat(sab_all, pretty.order.rows = T, pretty.order.cols = T, bottom.label.text.angle = 90, heat.pal = c("blue", "white", "red"), left.label.text.size = 3, bottom.label.text.size = 3, heat.pal.values = c(0, 0.5, 1) )
+
+```
+
+```{r}
+# Venn Diagram with 15 significant diseases
+
+euler(list(anemia = GDA_auto[GDA_auto$DiseaseName == "anemia hemolytic", "Symbol"], juvenileArthritis = GDA_auto[GDA_auto$DiseaseName == "arthritis juvenile", "Symbol"], RA = GDA_auto[GDA_auto$DiseaseName == "rheumatoid arthritis", "Symbol"], Other =  GDA_auto[GDA_auto$DiseaseName == "autoimmune diseases", "Symbol"], lymphSyndrome = GDA_auto[GDA_auto$DiseaseName == "lymphoproliferative syndrome", "Symbol"], enceph = GDA_auto[GDA_auto$DiseaseName == "encephalomyelitis autoimmune", "Symbol"], graves = GDA_auto[GDA_auto$DiseaseName == "graves disease", "Symbol"], hep = GDA_auto[GDA_auto$DiseaseName == "hepatitis autoimmune", "Symbol"], leukoenceph = GDA_auto[GDA_auto$DiseaseName == "leukoencephalopathies", "Symbol"], lupus = GDA_auto[GDA_auto$DiseaseName == "systemic lupus erythematosus", "Symbol"], MS = GDA_auto[GDA_auto$DiseaseName == "multiple sclerosis", "Symbol"], myaGravis = GDA_auto[GDA_auto$DiseaseName == "myasthenia gravis", "Symbol"], IBD = GDA_auto[GDA_auto$DiseaseName == "inflammatory bowel disease", "Symbol"], Crohn = GDA_auto[GDA_auto$DiseaseName == "crohn disease", "Symbol"], psoriasis = GDA_auto[GDA_auto$DiseaseName == "psoriasis", "Symbol"], InnateLCC = inLCC_innate)) %>% plot(., quantities = T)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+##################################################################################################################################################
+
+```{r}
+# remove names that are not diseases but category names
+remove = c("autoimmune diseases of the nervous system", "demyelinating autoimmune diseases, cns", "nervous system autoimmune disease, experimental", "vasculitis, central nervous system", "anti-neutrophil cytoplasmic antibody-associated vasculitis", "myasthenia gravis, autoimmune, experimental")
+
+all_autodisease_names = all_autodisease_names[!(all_autodisease_names$MESHTERM %in% remove),]
+
+```
+
+
+# Get genes associated with these autoimmune diseases
+```{r}
+# Get list of diseases in GDA data
+# clean gene names
+
+doesItWork_auto = gsub(pattern = "-", replacement = " ", x = all_autodisease_names$MESHTERM , ignore.case = T)
+doesItWork_auto = gsub("[^0-9A-Za-z ]","" , doesItWork_auto,ignore.case = TRUE)
+auto_disease_unique = unique(doesItWork_auto)
+
+doesItWork_GDA = gsub(pattern = "-", replacement = " ", x = GDA_data$DiseaseName, ignore.case = T)
+doesItWork_GDA = gsub("[^0-9A-Za-z ]","" , doesItWork_GDA, ignore.case = TRUE)
+GDA_disease_unique = unique(doesItWork_GDA)
+
+disease_dist = stringdistmatrix(a = auto_disease_unique, b = GDA_disease_unique, method = "cosine")
+disease_dist = disease_dist %>% as.data.frame()
+rownames(disease_dist) = auto_disease_unique
+colnames(disease_dist) = GDA_disease_unique
+
+```
+
+```{r}
+# Get disease names in GDA data that are 0.1 away by cosine similarity to MeSH terms
+
+sim_threshold = 0.04 # at 0.01, I get 17 diseases, 0.04 -> 19
+keep_disease = c()
+for(i in seq(1:ncol(disease_dist))){
+  
+  dist_vect_temp = disease_dist[,i]
+  
+  for(j in seq(1:nrow(disease_dist))){
+    if(dist_vect_temp[j] <= sim_threshold){
+      dis_to_keep =  colnames(disease_dist)[i]
+      print(paste0("MeSH: ", rownames(disease_dist)[j],"   GDA Name: ", dis_to_keep))
+      keep_disease = c(keep_disease, dis_to_keep)
+    }
+  }
+}
+
+#keep_disease = unique(keep_disease)
+
+```
+
+With 0.05, this is the only error:
+"MeSH: caplan syndrome   GDA Name: allanson pantzar mcleod syndrome"
+These are two very different diseases.
+
+```{r}
+sum(GDA_disease_unique %in% all_autodisease_names$MESHTERM) # there are 8 autoimmune diseases in there, by exact terms
+```
+
+
+## Venn Diagrams
+
+```{r}
+# Get genes from GDA associated with diseases 
+autoimmune_genes <- GDA_data %>% dplyr::filter(GDA_data$DiseaseName %in% GDA_disease) #
+autoimmune_genes$Type <- "Autoimmunity"
+colnames(autoimmune_genes)[3] <- c("Symbol")
+
+innateimmune_genes <- as.data.frame(all_genes_df$Symbol) %>% unique()
+innateimmune_genes$Type <- "Innate Immunity"
+colnames(innateimmune_genes)[1] <-c("Symbol")
+```
+
+# What is the general overlap of genes in our innate and autoimmune diseases data set?
+```{r}
+# Make a venn diagram to look at the overlap
+autos <- autoimmune_genes$Symbol %>% unique()
+innates <- as.character(innateimmune_genes$Symbol) %>% unique()
+
+venn.diagram(
+  x = list(autos, innates),
+  category.names = c("Autoimmunity" , "Innate Immunity"),
+  filename = 'All_Innate_vs_Auto.png',
+  height = 3000, 
+  width = 4000,
+  output=TRUE,
+  main = "Autoimmunity Disease Assoc. Genes with All Innate Immunity"
+)
+```
+
+```{r}
+genes_inter = autos[autos %in% innates]
+length(unique(genes_inter))
+```
+
+
+
+
+
+
+```{r}
+# Degrees of Genes in LCC and not in LCC
+
+# first make the subgraph
+auto_graph <- induced_subgraph(ppi_g, ppi_auto)
+temp <- components(auto_graph)$membership # 
+inLCC_auto = names(temp[temp == 1])
+nonLCC_auto = names(temp[temp != 1])
+
+# plot non LCC degrees
+not_auto_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_auto)
+
+not_LCC_auto_df <- not_auto_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_auto_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in Autoimmune Diseases LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_auto_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_auto) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_auto_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Autoimmune Diseases LCC") +
+  theme_minimal()
+
+```
+
+```{r}
+# Were there other connected components # Yes!
+count_df = as.character(components(auto_graph)$csize) %>% as.data.frame()
+colnames(count_df)[1] = "Size"
+
+count_df %>% summarise(., count = n(), group_by=Size)
+
+# what us the one high degree gene (degree > 1000) # ETS1
+```
+
+
+# What is the overlap between the innate immunity interactome and the autoimmune disease LCC
+```{r}
+innate_graph <- induced_subgraph(ppi_g, ppi_innate)
+temp <- components(innate_graph)$membership
+inLCC_innate = names(temp[temp == 1])
+
+venn.diagram(
+  x = list(inLCC_auto, inLCC_innate),
+  category.names = c("Autoimmunity LCC" , "Innate Immunity LCC"),
+  filename = 'LCC_Innate_vs_Auto.png',
+  height = 3000, 
+  width = 4000,
+  output=TRUE,
+  main = "Autoimmunity Disease Assoc. LCC with Innate Immunity LCC"
+)
+
+```
+
+
+
+## Do the diseases modules form significant ineractomes?
+
+# "arthritis juvenile" LCC
+```{r}
+arthjuv_df <- subset(GDA_data, GDA_data$DiseaseName == "arthritis juvenile")
+genes_arthjuv <- arthjuv_df[!duplicated(arthjuv_df$hgnc_symbol), "hgnc_symbol"]
+genes_arthjuv = genes_arthjuv[genes_arthjuv %in% V(ppi_g)$name]
+
+LCC_arth_juv = LCC_signif(G = ppi_g, targets = genes_arthjuv, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_arth_juv$size, LCC_arth_juv$distribution)
+hist(LCC_arth_juv$distribution, main = "Juvenile Arthritis LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_arth_juv$size, col = "red")
+```
+
+```{r}
+# first make the subgraph
+ja_graph <- induced_subgraph(ppi_g, genes_arthjuv)
+temp <- components(ja_graph)$membership # 
+inLCC_ja = names(temp[temp == 2])
+nonLCC_ja = names(temp[temp != 2])
+
+# plot non LCC degrees
+not_ja_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_ja)
+
+not_LCC_ja_df <- not_ja_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_ja_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in Juvenile Arthritis LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_ja_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_ja) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_ja_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Juvenile Arthritis LCC") +
+  theme_minimal()
+
+```
+
+# "encephalomyelitis autoimmune" LCC
+```{r}
+enceph_df <- subset(GDA_data, GDA_data$DiseaseName == "encephalomyelitis autoimmune")
+genes_enceph <- enceph_df[!duplicated(enceph_df$hgnc_symbol), "hgnc_symbol"]
+genes_enceph = genes_enceph[genes_enceph %in% V(ppi_g)$name]
+
+LCC_enceph = LCC_signif(G = ppi_g, targets = genes_enceph, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_enceph$size, LCC_enceph$distribution)
+hist(LCC_enceph$distribution, main = "Encephosmyelitis LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_enceph$size, col = "red")
+```
+
+```{r}
+enceph_graph <- induced_subgraph(ppi_g, genes_enceph)
+temp <- components(enceph_graph)$membership # 
+inLCC_enceph = names(temp[temp == 2])
+nonLCC_enceph = names(temp[temp != 2])
+
+# plot non LCC degrees
+not_enceph_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_enceph)
+
+not_LCC_enceph_df <- not_enceph_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_enceph_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in Enceph. LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_enceph_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_enceph) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_enceph_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Enceph. LCC") +
+  theme_minimal()
+
+```
+
+# "giant cell arteritis" LCC
+```{r}
+giant_df <- subset(GDA_data, GDA_data$DiseaseName == "giant cell arteritis")
+genes_giant <- giant_df[!duplicated(giant_df$hgnc_symbol), "hgnc_symbol"]
+genes_giant = genes_giant[genes_giant %in% V(ppi_g)$name]
+
+LCC_giant = LCC_signif(G = ppi_g, targets = genes_giant, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_giant$size, LCC_giant$distribution)
+hist(LCC_giant$distribution, main = "Giant Cell Arteritis LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_giant$size, col = "red")
+```
+
+```{r}
+giant_graph <- induced_subgraph(ppi_g, genes_giant)
+components(giant_graph) # 
+
+# plot LCC degrees
+deg_giant_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% genes_giant) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(deg_giant_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Giant Cell Art.") +
+  theme_minimal()
+
+```
+
+
+# "glomerulonephritis iga" LCC
+```{r}
+iga_df <- subset(GDA_data, GDA_data$DiseaseName == "glomerulonephritis iga")
+genes_iga <- iga_df[!duplicated(iga_df$hgnc_symbol), "hgnc_symbol"]
+genes_iga = genes_iga[genes_iga %in% V(ppi_g)$name]
+
+LCC_iga = LCC_signif(G = ppi_g, targets = genes_iga, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_iga$size, LCC_iga$distribution)
+hist(LCC_iga$distribution, main = "Glomerulonephritis Iga LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 600), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_iga$size, col = "red")
+```
+
+```{r}
+iga_graph <- induced_subgraph(ppi_g, genes_iga)
+components(iga_graph) # 
+
+# plot LCC degrees
+deg_iga_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% genes_iga) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(deg_iga_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Glom. Iga") +
+  theme_minimal()
+
+```
+
+# "glomerulonephritis membranous"
+```{r}
+glom_df <- subset(GDA_data, GDA_data$DiseaseName == "glomerulonephritis membranous")
+genes_glom <- glom_df[!duplicated(glom_df$hgnc_symbol), "hgnc_symbol"]
+genes_glom = genes_glom[genes_glom %in% V(ppi_g)$name]
+
+LCC_glom = LCC_signif(G = ppi_g, targets = genes_glom, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_glom$size, LCC_glom$distribution)
+hist(LCC_glom$distribution, main = "Glomerulonephritis Membranous LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 600), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_glom$size, col = "red")
+```
+
+```{r}
+glom_graph <- induced_subgraph(ppi_g, genes_glom)
+components(glom_graph) 
+
+# plot LCC degrees
+deg_glom_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% genes_glom) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(deg_glom_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Glom. Mem.") +
+  theme_minimal()
+
+```
+
+
+# "graves disease" LCC
+```{r}
+grav_df <- subset(GDA_data, GDA_data$DiseaseName == "graves disease")
+genes_grav <- grav_df[!duplicated(grav_df$hgnc_symbol), "hgnc_symbol"]
+genes_grav = genes_grav[genes_grav %in% V(ppi_g)$name]
+
+LCC_grav = LCC_signif(G = ppi_g, targets = genes_grav, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_grav$size, LCC_grav$distribution)
+hist(LCC_grav$distribution, main = "Graves Disease LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 600), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_grav$size, col = "red")
+```
+
+```{r}
+grav_graph <- induced_subgraph(ppi_g, genes_grav)
+temp = components(grav_graph)$membership
+inLCC_grav = names(temp[temp == 5])
+nonLCC_grav = names(temp[temp != 5])
+
+# plot non LCC degrees
+not_grav_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_grav)
+
+not_LCC_grav_df <- not_grav_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_grav_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in Graves Disease LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_grav_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_grav) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_grav_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Graves Disease LCC") +
+  theme_minimal()
+```
+
+
+# "graves ophthalmopathy" LCC
+```{r}
+gravop_df <- subset(GDA_data, GDA_data$DiseaseName == "graves ophthalmopathy")
+genes_gravop <- gravop_df[!duplicated(gravop_df$hgnc_symbol), "hgnc_symbol"]
+genes_gravop = genes_gravop[genes_gravop %in% V(ppi_g)$name]
+
+LCC_gravop = LCC_signif(G = ppi_g, targets = genes_gravop, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_gravop$size, LCC_gravop$distribution)
+hist(LCC_iga$distribution, main = "Graves Ophthalmopathy LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 600), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_gravop$size, col = "red")
+```
+
+```{r}
+# plot LCC degrees
+deg_gravop_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% genes_gravop) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(deg_gravop_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Graves Ophthalmopathy") +
+  theme_minimal()
+```
+
+"hashimoto disease" LCC
+```{r}
+hash_df <- subset(GDA_data, GDA_data$DiseaseName == "hashimoto disease")
+genes_hash <- hash_df[!duplicated(hash_df$hgnc_symbol), "hgnc_symbol"]
+genes_hash = genes_hash[genes_hash %in% V(ppi_g)$name]
+
+LCC_hash = LCC_signif(G = ppi_g, targets = genes_hash, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_hash$size, LCC_hash$distribution)
+hist(LCC_hash$distribution, main = "Hashimoto Disease LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 600), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_hash$size, col = "red")
+```
+
+```{r}
+# plot LCC degrees
+deg_hash_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% genes_hash) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(deg_hash_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Hashimoto") +
+  theme_minimal()
+```
+
+# "hepatitis autoimmune" LCC
+```{r}
+hep_df <- subset(GDA_data, GDA_data$DiseaseName == "hepatitis autoimmune")
+genes_hep <- hep_df[!duplicated(hep_df$hgnc_symbol), "hgnc_symbol"]
+genes_hep = genes_hep[genes_hep %in% V(ppi_g)$name]
+
+LCC_hep = LCC_signif(G = ppi_g, targets = genes_hep, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_hep$size, LCC_hep$distribution)
+hist(LCC_hep$distribution, main = "Hepatitis Autoimmune LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 600), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_hep$size, col = "red")
+```
+
+```{r}
+hep_graph <- induced_subgraph(ppi_g, genes_hep)
+temp = components(hep_graph)$membership
+inLCC_hep = names(temp[temp == 4])
+nonLCC_hep = names(temp[temp != 4])
+
+# plot non LCC degrees
+not_hep_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_hep)
+
+not_LCC_hep_df <- not_hep_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_hep_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in Hep. LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_hep_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_hep) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_hep_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Hep. LCC") +
+  theme_minimal()
+```
+
+
+# "multiple sclerosis" LCC
+```{r}
+ms_df <- subset(GDA_data, GDA_data$DiseaseName == "multiple sclerosis")
+genes_ms <- ms_df[!duplicated(ms_df$hgnc_symbol), "hgnc_symbol"]
+genes_ms = genes_ms[genes_ms %in% V(ppi_g)$name]
+
+LCC_ms = LCC_signif(G = ppi_g, targets = genes_ms, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_ms$size, LCC_ms$distribution)
+hist(LCC_ms$distribution, main = "Multiple Sclerosis LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 600), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_ms$size, col = "red")
+```
+
+```{r}
+ms_graph <- induced_subgraph(ppi_g, genes_ms)
+temp = components(ms_graph)$membership
+inLCC_ms = names(temp[temp == 1])
+nonLCC_ms = names(temp[temp != 1])
+
+# plot non LCC degrees
+not_ms_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_ms)
+
+not_LCC_ms_df <- not_ms_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_ms_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in MS LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_ms_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_ms) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_ms_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in MS LCC") +
+  theme_minimal()
+```
+
+
+# "myasthenia gravis" LCC
+```{r}
+mya_df <- subset(GDA_data, GDA_data$DiseaseName == "myasthenia gravis")
+genes_mya <- mya_df[!duplicated(mya_df$hgnc_symbol), "hgnc_symbol"]
+genes_mya = genes_mya[genes_mya %in% V(ppi_g)$name]
+
+LCC_mya = LCC_signif(G = ppi_g, targets = genes_mya, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_mya$size, LCC_mya$distribution)
+hist(LCC_mya$distribution, main = "Myasthenia Gravis LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 800), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_mya$size, col = "red")
+```
+
+```{r}
+mya_graph <- induced_subgraph(ppi_g, genes_mya)
+temp = components(mya_graph)$membership
+inLCC_mya = names(temp[temp == 4])
+nonLCC_mya = names(temp[temp != 4])
+
+# plot non LCC degrees
+not_mya_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_mya)
+
+not_LCC_mya_df <- not_mya_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_mya_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in Mya. Gravis LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_mya_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_mya) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_mya_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Mya. Gravis LCC") +
+  theme_minimal()
+```
+
+
+# "neuromyelitis optica" LCC
+```{r}
+neuro_df <- subset(GDA_data, GDA_data$DiseaseName == "neuromyelitis optica")
+genes_neuro <- neuro_df[!duplicated(neuro_df$hgnc_symbol), "hgnc_symbol"]
+genes_neuro = genes_neuro[genes_neuro %in% V(ppi_g)$name]
+
+LCC_neuro = LCC_signif(G = ppi_g, targets = genes_neuro, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_neuro$size, LCC_neuro$distribution)
+hist(LCC_neuro$distribution, main = "Neuromyelitis Optica LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 600), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_neuro$size, col = "red")
+```
+
+```{r}
+# plot LCC degrees
+deg_neuro_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% genes_neuro) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(deg_neuro_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Neuro. Optica") +
+  theme_minimal()
+```
+
+# "rheumatoid arthritis" LCC
+```{r}
+ra_df <- subset(GDA_data, GDA_data$DiseaseName == "rheumatoid arthritis")
+genes_ra <- ra_df[!duplicated(ra_df$hgnc_symbol), "hgnc_symbol"]
+genes_ra = genes_ra[genes_ra %in% V(ppi_g)$name]
+
+LCC_ra = LCC_signif(G = ppi_g, targets = genes_ra, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_ra$size, LCC_ra$distribution)
+hist(LCC_ra$distribution, main = "Rheumatoid Arthritis LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 600), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_ra$size, col = "red")
+```
+
+```{r}
+ra_graph <- induced_subgraph(ppi_g, genes_ra)
+temp = components(ra_graph)$membership
+inLCC_ra = names(temp[temp == 2])
+nonLCC_ra = names(temp[temp != 2])
+
+# plot non LCC degrees
+not_ra_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_ra)
+
+not_LCC_ra_df <- not_ra_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_ra_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in RA LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_ra_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_ra) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_ra_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in RA LCC") +
+  theme_minimal()
+```
+
+
+
+# "systemic lupus erythematosus"
+```{r}
+lup_df <- subset(GDA_data, GDA_data$DiseaseName == "systemic lupus erythematosus")
+genes_lup <- lup_df[!duplicated(lup_df$hgnc_symbol), "hgnc_symbol"]
+genes_lup = genes_lup[genes_lup %in% V(ppi_g)$name]
+
+LCC_lup = LCC_signif(G = ppi_g, targets = genes_lup, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_lup$size, LCC_lup$distribution)
+hist(LCC_lup$distribution, main = "Systemic Lupus Erythematosus LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 600), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_lup$size, col = "red")
+```
+
+```{r}
+lup_graph <- induced_subgraph(ppi_g, genes_lup)
+temp = components(lup_graph)$membership
+inLCC_lup = names(temp[temp == 1])
+nonLCC_lup = names(temp[temp != 1])
+
+# plot non LCC degrees
+not_lup_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_lup)
+
+not_LCC_lup_df <- not_lup_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_lup_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in Lupus LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_lup_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_lup) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_lup_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Lupus LCC") +
+  theme_minimal()
+```
+
+
+# "thyroiditis autoimmune"
+```{r}
+thy_df <- subset(GDA_data, GDA_data$DiseaseName == "thyroiditis autoimmune")
+genes_thy <- thy_df[!duplicated(thy_df$hgnc_symbol), "hgnc_symbol"]
+genes_thy = genes_thy[genes_thy %in% V(ppi_g)$name]
+
+LCC_thy = LCC_signif(G = ppi_g, targets = genes_thy, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_thy$size, LCC_thy$distribution)
+hist(LCC_thy$distribution, main = "Thyroiditis LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 600), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_thy$size, col = "red")
+```
+
+```{r}
+# plot LCC degrees
+deg_thy_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% genes_thy) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(deg_thy_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Thyroiditis") +
+  theme_minimal()
+```
+
+
+# "autoimmune diseases" LCC (the "other" classification)
+```{r}
+other_df <- subset(GDA_data, GDA_data$DiseaseName == "autoimmune diseases")
+genes_other <- other_df[!duplicated(other_df$hgnc_symbol), "hgnc_symbol"]
+genes_other = genes_other[genes_other %in% V(ppi_g)$name]
+
+LCC_other = LCC_signif(G = ppi_g, targets = genes_other, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_other$size, LCC_other$distribution)
+hist(LCC_other$distribution, main = "Other Autoimmune Diseases LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_other$size, col = "red")
+```
+
+```{r}
+# first make the subgraph
+other_graph <- induced_subgraph(ppi_g, genes_other)
+temp <- components(other_graph)$membership 
+inLCC_other = names(temp[temp == 1])
+nonLCC_other = names(temp[temp != 1])
+
+# plot non LCC degrees
+not_other_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_other)
+
+not_LCC_other_df <- not_other_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_other_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in Other Diseases LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_other_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_other) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_other_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Other Diseases LCC") +
+  theme_minimal()
+```
+
+
+# Separation between all 16 diseases and databases of the innate immune system
+```{r}
+# genes_arthjuv
+ja_df = genes_arthjuv %>% as.data.frame()
+ja_df$Label <- "Juvenile Arthritis"
+colnames(ja_df)[1] = "Genes"
+# genes_enceph
+enceph_df = genes_enceph %>% as.data.frame()
+enceph_df$Label <- "Encephosmyelitis"
+colnames(enceph_df)[1] = "Genes"
+# genes_giant
+giant_df = genes_giant %>% as.data.frame()
+giant_df$Label <- "Giant Cell Arteritis"
+colnames(giant_df)[1] = "Genes"
+# genes_iga
+iga_df = genes_iga %>% as.data.frame()
+iga_df$Label <- "Glom. Iga"
+colnames(iga_df)[1] = "Genes"
+# genes_glom
+glom_df = genes_glom %>% as.data.frame()
+glom_df$Label <- "Glom. Mem."
+colnames(glom_df)[1] = "Genes"
+# genes_grav
+grav_df = genes_grav %>% as.data.frame()
+grav_df$Label <- "Graves"
+colnames(grav_df)[1] = "Genes"
+# genes_gravop
+gravop_df = genes_gravop %>% as.data.frame()
+gravop_df$Label <- "Graves Ophth."
+colnames(gravop_df)[1] = "Genes"
+# genes_hash
+hash_df = genes_hash %>% as.data.frame()
+hash_df$Label <- "Hashimoto"
+colnames(hash_df)[1] = "Genes"
+# genes_hep
+hep_df = genes_hep %>% as.data.frame()
+hep_df$Label <- "Hepatitis"
+colnames(hep_df)[1] = "Genes"
+# genes_ms
+ms_df = genes_ms %>% as.data.frame()
+ms_df$Label <- "MS"
+colnames(ms_df)[1] = "Genes"
+# genes_mya
+mya_df = genes_mya %>% as.data.frame()
+mya_df$Label <- "Mya. Gravis"
+colnames(mya_df)[1] = "Genes"
+# genes_neuro
+neuro_df = genes_neuro %>% as.data.frame()
+neuro_df$Label <- "Neuro. Opt."
+colnames(neuro_df)[1] = "Genes"
+# genes_ra
+ra_df = genes_ra %>% as.data.frame()
+ra_df$Label <- "RA"
+colnames(ra_df)[1] = "Genes"
+# genes_lup
+lup_df = genes_lup %>% as.data.frame()
+lup_df$Label <- "Lupus"
+colnames(lup_df)[1] = "Genes"
+# genes_thy
+thy_df = genes_thy %>% as.data.frame()
+thy_df$Label <- "Thyroiditis"
+colnames(thy_df)[1] = "Genes"
+# genes_other
+other_df = genes_other %>% as.data.frame()
+other_df$Label <- "Other"
+colnames(other_df)[1] = "Genes"
+# ppi_auto
+ppi_auto_df = ppi_auto %>% as.data.frame()
+ppi_auto_df$Label <- "Autoimmune Disease"
+colnames(ppi_auto_df)[1] = "Genes"
+# ppi_innate
+ppi_innate_df = ppi_innate %>% as.data.frame()
+ppi_innate_df$Label <- "Innate Immunity"
+colnames(ppi_innate_df)[1] = "Genes"
+
+go_df <- subset(all_genes_df, all_genes_df$GO == "GO.DB")
+genes_go <- go_df[!duplicated(go_df$Symbol), "Symbol"] 
+genes_go = genes_go[genes_go %in% V(ppi_g)$name]
+go_df = genes_go %>% as.data.frame()
+go_df$Label <- "GO"
+colnames(go_df)[1] = "Genes"
+
+innate_df <- subset(all_genes_df, all_genes_df$InnateDB == "InnateDB")
+genes_innate <- innate_df[!duplicated(innate_df$Symbol), "Symbol"]
+genes_innate = genes_innate[genes_innate %in% V(ppi_g)$name]
+innate_df = genes_innate %>% as.data.frame()
+innate_df$Label <- "InnateDB"
+colnames(innate_df)[1] = "Genes"
+
+kegg_df <- subset(all_genes_df, all_genes_df$KEGG == "KEGG.db")
+genes_kegg <- kegg_df[!duplicated(kegg_df$Symbol), "Symbol"]
+genes_kegg = genes_kegg[genes_kegg %in% V(ppi_g)$name]
+kegg_df = genes_kegg %>% as.data.frame()
+kegg_df$Label <- "KEGG"
+colnames(kegg_df)[1] = "Genes"
+
+reactome_df <- subset(all_genes_df, all_genes_df$ReactomeDB == "ReactomeDB")
+genes_reactome <- reactome_df[!duplicated(reactome_df$Symbol), "Symbol"]
+genes_reactome = genes_reactome[genes_reactome %in% V(ppi_g)$name]
+reactome_df = genes_reactome %>% as.data.frame()
+reactome_df$Label <- "Reactome"
+colnames(reactome_df)[1] = "Genes"
+
+# Bind the gene and labels together
+sep_labels = rbind(ja_df, enceph_df) %>% rbind(., giant_df) %>% rbind(., iga_df) %>% rbind(., glom_df)
+sep_labels = rbind(sep_labels, grav_df) %>% rbind(., gravop_df) %>% rbind(., hash_df) %>% rbind(., hep_df)
+sep_labels = rbind(sep_labels, ms_df) %>% rbind(., mya_df) %>% rbind(., neuro_df) %>% rbind(., ra_df)
+sep_labels = rbind(sep_labels, lup_df) %>% rbind(., thy_df) %>% rbind(., other_df) %>% rbind(., go_df)
+sep_labels = rbind(sep_labels, innate_df) %>% rbind(., kegg_df) %>% rbind(., reactome_df) %>% rbind(., ppi_auto_df)  %>%                   rbind(., ppi_innate_df)
+
+# Calc. Sep.
+all_sep = module_sep(ppi_g, sep_labels)
+
+sab_all = all_sep$Sab
+sab_all[is.na(sab_all)] <- 0 # make NA 0
+sab_all = sab_all + t(sab_all)
+
+superheat(sab_all, pretty.order.rows = T, pretty.order.cols = T)
+
+```
+
+
+# Code I didn't use
+
+# Use Word2Vec in order to see which disease names are closest to each other using cosine similarity
+
+#```{r}
+
+edit_GDA = gsub(pattern = "-", replacement = " ", x = GDA_data$DiseaseName, ignore.case = T)
+edit_GDA = gsub("[^0-9A-Za-z ]","" , edit_GDA, ignore.case = TRUE)
+bank_GDA = unique(edit_GDA)
+
+bank_ncbi = c(syn_list, all_terms) %>% unlist() %>% unique() %>% as.data.frame(., stringsAsFactors = F) 
+colnames(bank_ncbi) = "Names"
+ncbi_bank = bank_ncbi %>% mutate(Names = tolower(Names))
+edit_ncbi = gsub(pattern = "-", replacement = " ", x = bank_ncbi$Names, ignore.case = T)
+edit_ncbi = gsub("[^0-9A-Za-z ]","" , edit_ncbi, ignore.case = TRUE)
+bank_ncbi = unique(edit_ncbi)
+
+# make as one list
+all_diseases = c(bank_GDA, bank_ncbi) %>% unique()
+
+# make into file
+write.table(all_diseases,"all_disease_list.csv",sep=",")
+#```
+
+#```{r} 
+require(magrittr)
+require(word2vec)
+
+DiseaseNames_w2v = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Auto_Innate_GDA/all_disease_list.csv" , sep = ",", header = T, stringsAsFactors = F)
+colnames(DiseaseNames_w2v) <- "DiseaseName"
+model <- read.word2vec( "/Users/ursulawidocki/Desktop/BarabasiLab/Data/pubmed2018_w2v_400D/pubmed2018_w2v_400D.bin" )
+terms <- summary(model, "vocabulary")
+embedding <- as.matrix(model) #%>% as.data.frame()
+Dis = DiseaseNames_w2v$DiseaseName %>% unique()
+
+emb = list()
+pb <- txtProgressBar(min = 0, max = length(Dis), style = 3)
+
+average_dis = function(disease, e = embedding2){
+  require(magrittr)
+  
+  t = rownames(e)
+  dis = disease %>% 
+    stringr::str_split(., " ", simplify = TRUE) %>% 
+    as.character()
+  
+  t_in_dis = sum(t %in% dis)
+  if(t_in_dis > 0){
+    v =  e[t %in% dis,] %>% 
+      matrix(., ncol = ncol(e)) %>% 
+      colMeans(., na.rm = TRUE) %>% 
+      as.data.frame()
+    names(v)= disease
+    return(v)
+  }
+}
+
+lalala = Dis %>% strsplit(., " ") %>% unlist() %>% unique()
+embedding2 = embedding[rownames(embedding) %in% lalala, ]
+
+average_dis(disease = Dis[1000], e = embedding2)
+
+require(parallel)
+cl = parallel::makePSOCKcluster(10)
+clusterExport(cl, "average_dis")
+clusterExport(cl, "embedding2")
+
+U = clusterApplyLB(cl, Dis, average_dis)
+U %<>% dplyr::bind_cols()
+
+stopCluster(cl)
+
+
+c = U %>%t%>% na.exclude() %>%  philentropy::distance(., method = "cosine") # matrix with distance between diseases
+xxx = U %>%t%>% na.exclude() %>% row.names()
+colnames(c) = row.names(c) = xxx
+# 
+data.table::fwrite(c, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/disease_name_dist.txt")
+
+#```
+
+#```{r}
+# from c, keep row from MeSH terms and synonyms
+name_dist_matrix = c[which(rownames(c) %in% bank_ncbi),]
+
+potential_names_GDA = c()
+
+for(i in seq(1:dim(name_dist_matrix)[1])){
+#for(i in seq(1:40)){
+  for(j in seq(1:dim(name_dist_matrix)[2])){
+  #for(j in seq(i+1:41)){
+   
+    if(name_dist_matrix[i,j] >= 0.99){
+      #print(paste0("Row: ",  rownames(name_dist_matrix)[i], " Col: ",  colnames(name_dist_matrix)[j]))
+      if(colnames(name_dist_matrix)[j] %in% bank_GDA){
+        #print(colnames(name_dist_matrix)[j])
+        potential_names_GDA = c(potential_names_GDA, colnames(name_dist_matrix)[j])
+        print(paste0("Row: ",  rownames(name_dist_matrix)[i], " Col: ",  colnames(name_dist_matrix)[j]))
+      }
+    }
+    
+  }
+}
+
+length(unique(potential_names_GDA))
+
+#```
+
+
+

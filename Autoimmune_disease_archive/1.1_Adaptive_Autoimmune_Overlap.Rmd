@@ -1,0 +1,393 @@
+---
+title: "1.1.0_Adaptive_Autoimmune_Overlap"
+author: "Ursula Widocki"
+date: "6/7/2021"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+library(eulerr) # for venn diagrams, maybe try upSetR instead
+library(gprofiler2) # gene enrichment
+library(dplyr)
+library(stringr)
+library(stringdist)
+library(superheat)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+
+set.seed(123) # for venn diagrams
+
+```
+
+# Read in data and set up their objects
+```{r}
+# Gene-disease association data
+GDA_auto <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto.csv", sep = ",", header = T, stringsAsFactors = F)
+colnames(GDA_auto)[3] <- "Symbol"
+
+# Innate immunity genes
+all_adap_genes_df <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/adaptive_genes_all.tsv", header = T, sep = "\t", stringsAsFactors = F)
+
+# PPI
+ppi_df <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df <- ppi_df[,c("Symbol_A", "Symbol_B")]
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g = ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+
+# What is the general overlap of genes in our innate and autoimmune diseases data set?
+```{r}
+# Make a venn diagram to look at the overlap
+autos <- GDA_auto$Symbol %>% unique()
+adapts <- as.character(all_adap_genes_df$Symbol) %>% unique()
+
+fit <- euler(list(autoimmuneDiseases = autos, adaptImmunity = adapts))
+
+# Customize colors, remove borders, bump alpha, color labels white
+plot(fit,
+     fills = list(fill = c("red", "steelblue4"), alpha = 0.4),
+     labels = list(col = "white", font = 4), quantities = T)
+
+
+```
+
+```{r}
+hypergeom_test = function(success, universe_success, universe_failure, size_collected){
+  phyper(q = success, m = universe_success, n = universe_failure, k = size_collected, lower.tail = TRUE, log.p = FALSE)
+}
+```
+
+```{r}
+# How signif. is this overlap?
+
+genes_i <- autos
+genes_j <- adapts
+all <- unique(c(genes_i, genes_j))
+
+universe_success <- intersect(genes_i, genes_j)
+q <- length(universe_success) / length(all)
+universe_failure <- all[!(all %in% universe_success)]
+size_collected <- length(all)
+
+hypergeom_test(success = q, universe_success = length(universe_success), universe_failure = length(universe_failure), size_collected = size_collected)
+
+```
+
+
+# Given our PPI data, how does this overlap change?
+```{r}
+ppi_auto <- autos[autos %in% V(ppi_g)$name]
+ppi_adapt = adapts[adapts %in% V(ppi_g)$name]
+
+fit <- euler(list(autoimmuneDiseases = ppi_auto, adaptImmunity = ppi_adapt))
+
+# Customize colors, remove borders, bump alpha, color labels white
+plot(fit,
+     fills = list(fill = c("red", "steelblue4"), alpha = 0.4),
+     labels = list(col = "white", font = 4), quantities = T)
+```
+
+```{r}
+# Go through each disease and store LCC size and p-value
+
+GDA_disease = unique(GDA_auto$NewName)
+GDA_LCC_df = as.data.frame(matrix(0, ncol = 2, nrow = length(GDA_disease)))
+colnames(GDA_LCC_df) = c("LCCsize", "LCCp")
+rownames(GDA_LCC_df) = GDA_disease
+N = 1000
+for(dis in GDA_disease){
+  # get genes of disease
+  genes_df = subset(GDA_auto, GDA_auto$NewName == dis)
+  genes <- genes_df[!duplicated(genes_df$Symbol), "Symbol"]
+  genes = genes[genes %in% V(ppi_g)$name]
+  
+  print(dis)
+  
+  # assess LCC of disease
+  LCC_temp = LCC_signif(G = ppi_g, targets = genes, num_bins_degree_G = 50, min_bin_degree = 20, iter = N)
+  
+  GDA_LCC_df[dis, "LCCsize"] <- LCC_temp$size
+  GDA_LCC_df[dis, "LCCp"] <- LCC_temp$p_val
+  
+}
+
+```
+
+```{r}
+# Add a few more things to the LCC df
+
+GDA_LCC_df$disease = rownames(GDA_LCC_df) # add disease makes
+
+# add if p-value < 0.05
+GDA_LCC_df %<>% mutate(signif = ifelse(GDA_LCC_df$LCCp < 0.05, "signif", "notsignif"))
+
+```
+
+
+# Do to autoimmune diseases with signif LCC genes form a significant LCC of there own?
+```{r}
+
+signif_dis = GDA_LCC_df[GDA_LCC_df$LCCp < 0.05, "disease"] # get genes in diseases with signif LCC
+genes_signif_dis = GDA_auto[GDA_auto$NewName %in% signif_dis,"Symbol"] %>% unique()
+genes_signif_dis = genes_signif_dis[genes_signif_dis %in% V(ppi_g)$name]
+
+LCC_all_auto = LCC_signif(G = ppi_g, targets = genes_signif_dis , num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_all_auto$size, LCC_all_auto$distribution)
+hist(LCC_all_auto$distribution, main = "Autoimmune Disease LCC Empirical Distrib using Diseases with Signif LCC ", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_all_auto$size, col = "red")
+```
+```{r}
+# Degrees of Genes in LCC and not in LCC
+
+# first make the subgraph
+auto_graph <- induced_subgraph(ppi_g, ppi_auto)
+temp <- components(auto_graph)$membership # 
+inLCC_auto = names(temp[temp == 1])
+nonLCC_auto = names(temp[temp != 1])
+
+# plot non LCC degrees
+not_auto_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_auto)
+
+not_LCC_auto_df <- not_auto_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_auto_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in Autoimmune Diseases LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_auto_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_auto) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_auto_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Autoimmune Diseases LCC") +
+  theme_minimal()
+
+```
+
+
+```{r}
+# Check out the adaptive immunity LCC, just in case
+adapt_graph <- induced_subgraph(ppi_g, ppi_adapt)
+temp <- components(adapt_graph)$membership
+inLCC_adapt = names(temp[temp == 1])
+
+LCC_adapt = LCC_signif(G = ppi_g, targets = ppi_adapt, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_adapt$size, LCC_adapt$distribution)
+hist(LCC_adapt$distribution, main = "Adapt. Immunity LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_adapt$size, col = "red")
+```
+```{r}
+# Degrees of Genes in LCC and not in LCC
+
+# first make the subgraph
+adapt_graph <- induced_subgraph(ppi_g, ppi_adapt)
+temp <- components(adapt_graph)$membership # 
+inLCC_adapt = names(temp[temp == 1])
+nonLCC_adapt= names(temp[temp != 1])
+
+# plot non LCC degrees
+not_adapt_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_adapt)
+
+not_LCC_adapt_df <- not_adapt_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_adapt_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in Adaptive Immunity LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_adapt_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_adapt) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_adapt_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Adaptive Immunity LCC") +
+  theme_minimal()
+
+```
+
+
+# Does the intersect make an LCC?
+
+```{r}
+# Intersect LCC
+
+genes_intersect = inLCC_auto[inLCC_auto %in% inLCC_adapt] #
+#length(unique(genes_intersect))
+
+LCC_inter = LCC_signif(G = ppi_g, targets = genes_intersect, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_inter$size, LCC_inter$distribution)
+hist(LCC_inter$distribution, main = "Intersect of Adaptive and Autoimmune Disease LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_inter$size, col = "red")
+
+```
+```{r}
+# Degrees of Genes in LCC and not in LCC
+
+# first make the subgraph
+inter_graph <- induced_subgraph(ppi_g, genes_intersect)
+temp <- components(inter_graph)$membership 
+inLCC_inter = names(temp[temp == 1])
+nonLCC_inter = names(temp[temp != 1])
+
+# plot non LCC degrees
+not_inter_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_inter)
+
+not_LCC_inter_df <- not_inter_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_inter_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Intersection but Not in Auto-Adapt. LCC") +
+  theme_minimal()
+
+# plot LCC degrees
+LCC_inter_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_inter) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_inter_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in Intersection of Auto-Adapt. LCC") +
+  theme_minimal()
+```
+
+# How do the LCCs of innate immunity and autoimmune disease module overlap?
+
+```{r}
+fit <- euler(list(autoimmuneDiseaseLCC = inLCC_auto, adaptImmunityLCC = inLCC_adapt))
+
+# Customize colors, remove borders, bump alpha, color labels white
+plot(fit,
+     fills = list(fill = c("red", "steelblue4"), alpha = 0.4),
+     labels = list(col = "white", font = 4), quantities = T)
+
+```
+
+
+```{r}
+# Separation of these diseases and adaptive immunity
+
+keep_dis = GDA_auto[GDA_auto$NewName %in% signif_dis,c("Symbol", "NewName")]
+colnames(keep_dis) = c("Genes", "Label")
+
+# all autoimmunity genes
+genes_auto <- GDA_auto$Symbol %>% unique() 
+genes_auto = genes_auto[genes_auto %in% V(ppi_g)$name]
+auto_df = genes_auto %>% as.data.frame()
+auto_df$Label <- "All Signif Auto"
+colnames(auto_df)[1] = "Genes"
+
+# all iadaptive immunity genes
+genes_all_adapt <- all_adap_genes_df$Symbol %>% unique() 
+genes_all_adapt = genes_all_adapt[genes_all_adapt %in% V(ppi_g)$name]
+all_adap_df = genes_all_adapt %>% as.data.frame()
+all_adap_df$Label <- "All adapt."
+colnames(all_adap_df)[1] = "Genes"
+
+# intersect
+inter_labels = inLCC_inter %>% as.data.frame()
+inter_labels$Label <- "Intersect"
+colnames(inter_labels)[1] = "Genes"
+
+# GO
+go_df <- subset(all_adap_genes_df, all_adap_genes_df$GO == "GO.DB")
+genes_go <- go_df[!duplicated(go_df$Symbol), "Symbol"] 
+genes_go = genes_go[genes_go %in% V(ppi_g)$name]
+go_df = genes_go %>% as.data.frame()
+go_df$Label <- "GO"
+colnames(go_df)[1] = "Genes"
+
+# KEGG
+kegg_df <- subset(all_adap_genes_df, all_adap_genes_df$KEGG == "KEGG.db")
+genes_kegg <- kegg_df[!duplicated(kegg_df$Symbol), "Symbol"]
+genes_kegg = genes_kegg[genes_kegg %in% V(ppi_g)$name]
+kegg_df = genes_kegg %>% as.data.frame()
+kegg_df$Label <- "KEGG"
+colnames(kegg_df)[1] = "Genes"
+
+# Reactome
+reactome_df <- subset(all_adap_genes_df, all_adap_genes_df$ReactomeDB == "ReactomeDB")
+genes_reactome <- reactome_df[!duplicated(reactome_df$Symbol), "Symbol"]
+genes_reactome = genes_reactome[genes_reactome %in% V(ppi_g)$name]
+reactome_df = genes_reactome %>% as.data.frame()
+reactome_df$Label <- "Reactome"
+colnames(reactome_df)[1] = "Genes"
+
+# Bind the gene and labels together
+sep_labels = rbind(keep_dis, auto_df) %>% rbind(., all_adap_df) %>% rbind(., go_df) %>% rbind(., kegg_df) %>% rbind(., reactome_df) %>% rbind(.,inter_labels)
+
+# Calc. Sep.
+all_sep = module_sep(ppi_g, sep_labels)
+
+sab_all = all_sep$Sab
+sab_all[is.na(sab_all)] <- 0 # make NA 0
+sab_all = sab_all + t(sab_all)
+
+superheat(sab_all, pretty.order.rows = T, pretty.order.cols = T, bottom.label.text.angle = 90, heat.pal = c("blue", "white", "red"), left.label.text.size = 2, bottom.label.text.size = 3, heat.pal.values = c(0, 0.27, 1) )
+
+```
+```{r}
+from_adap = sab_all[,which(colnames(sab_all) == "All adapt.")]
+
+which(from_adap < 0)
+```
+
+
+

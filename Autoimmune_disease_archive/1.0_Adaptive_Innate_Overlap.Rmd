@@ -1,0 +1,81 @@
+---
+title: "1.2.0_Innate_Adaptive_Overlap"
+author: "Ursula Widocki"
+date: "6/7/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+```
+
+```{r}
+library(eulerr) # for venn diagrams, maybe try upSetR instead
+library(gprofiler2) # gene enrichment
+library(dplyr)
+library(stringr)
+library(stringdist)
+library(superheat)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+
+set.seed(123) # for venn diagrams
+
+```
+
+```{r}
+innate_genes_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/innate_genes_all.tsv', header = T, sep = "\t", row.names = 1, stringsAsFactors = F)
+
+adapt_genes_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/adaptive_genes_all.tsv', header = T, sep = "\t", row.names = 1, stringsAsFactors = F)
+```
+
+
+
+
+# Innate and Adaptive overlap Venn diagram
+```{r}
+innates = unique(innate_genes_df$Symbol)
+adapt = unique(adapt_genes_df$Symbol)
+
+fit <- euler(list(Innate = innates, Adaptive = adapt))
+
+# Customize colors, remove borders, bump alpha, color labels white
+plot(fit,
+     fills = list(fill = c("red", "steelblue4"), alpha = 0.4),
+     labels = list(col = "white", font = 4), quantities = T)
+```
+
+
+# Does Innate make an LCC?
+```{r}
+
+```
+
+
+# Does Adaptive make an LCC?
+```{r}
+
+```
+
+
+# Does the Innate-Adaptive intersect make an LCC?
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

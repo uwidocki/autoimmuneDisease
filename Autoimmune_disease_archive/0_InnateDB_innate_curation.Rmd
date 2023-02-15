@@ -1,0 +1,220 @@
+---
+title: "InnateDB_immune_gene_curation"
+author: "Ursula Widocki"
+date: "12/10/2020"
+output: html_document
+---
+
+```{r}
+rm(list=ls())
+
+library("tidyverse")
+library("readxl")
+
+```
+
+## Try reading it straight from the website
+
+url <- 'https://onlinecourses.science.psu.edu/stat501/sites/onlinecourses.science.psu.edu.stat501/files/data/leukemia_remission.txt'
+df <- read.table(url, sep = '\t',header = TRUE, fileEncoding = "UTF-16LE")
+
+
+## To download the entire database
+# From https://www.innatedb.com/redirect.do?go=downloadCurated
+file = "/Users/ursulawidocki/Desktop/BarabasiLab/Virome/Data/innatedb_all.mitab"
+
+innate_df <- read.table(file, sep = '\t', header = TRUE)
+
+## Keep human genes
+sub <- "ENSG0"
+human_gene_rows <- grepl(sub, innate_df$alt_identifier_A)
+
+innate_df <- innate_df[human_gene_rows,]
+
+
+## make a list with each gene only once
+
+genes <- unique(innate_df$alt_identifier_A)
+#genes <- unique(genes)
+genes[[2]]
+
+
+
+#######
+## Innate Immunity genes
+
+```{r}
+## To download just the innate immunity genes
+
+# From https://www.innatedb.com/annotatedGenes.do?type=innatedb
+man_file <- "/Users/ursulawidocki/Desktop/BarabasiLab/Data/innatedb_curated_genes_innate_immunity.xls"
+
+innate_genes_df <- read_xls(man_file)
+
+innate_genes_df <- innate_genes_df[which(innate_genes_df$Species == "9606"),]
+
+```
+
+```{r}
+## Add Database column
+
+innate_genes_df$InnateDB <- rep("1",nrow(innate_genes_df))
+innate_genes_df <- innate_genes_df[,c("Gene Symbol", "Annotation", "InnateDB")]
+colnames(innate_genes_df) <- c("Symbol", "InnateDBpathName", "InnateDB")
+
+```
+
+```{r}
+write.csv(innate_genes_df,'/Users/ursulawidocki/Desktop/BarabasiLab/Data/innatedb_innate_genes.csv')
+```
+
+Don't have EntrezID for IL29
+MARCH5
+TMEM173
+Il25
+Ticam2
+DEFB4
+Icosl
+Smpdl3b
+Ctnnb1
+Gsk3a
+Psen2
+Stmn1
+MB21D1
+IL1F7
+MIR203
+Adrbk1
+hsa-mir-146a
+Il5
+Kdm4a
+Flt4
+Nlrp1a
+IL28B
+Fscn1
+C3ar1
+Rheb
+CTSL1
+GNB2L1
+Ifi202b
+Numb
+Marco
+IL28A
+Traf5
+Mertk
+Axl
+PARK2
+SFTPA1B;SFTPA1
+hsa-mir-132
+Mir497
+MIR378
+MS4A8B
+Edil3
+KIAA0226
+TMED7;TICAM2
+SELK
+PLUNC
+CD97
+GPR77
+Plg
+CCBP2
+MAP3K7IP1
+TCEB2
+AMACR;C1QTNF3
+C19orf29
+IL8
+TCEB1
+MoleculeID 32847
+IL8RB
+KDM1
+MAP3K7IP2
+hsa-mir-146b
+Mknk1
+hsa-mir-126
+hsa-mir-98
+hsa-let-7e
+ERBB2IP
+RP5-1000E10.4
+MAP3K7IP3
+APOBEC3G;APOBEC3F
+hsa-mir-152
+hsa-mir-148b
+hsa-mir-148a
+MIF;SLC2A11
+TOMM70A
+USP17
+IFNAR2;IL10RB
+
+############################################################## Code I didn't use
+
+
+
+## Code to get the Entrez IDs for genes
+
+library(org.Hs.eg.db)
+hs <- org.Hs.eg.db
+my.symbols <- c(innate_genes_df$`Gene Symbol`)
+hs <- select(hs, 
+       keys = my.symbols,
+       columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+hs$`Gene Symbol` <- hs$SYMBOL
+hs <- hs[,2:3]
+
+innate_genes_df <- cbind(innate_genes_df, hs)
+innate_genes_df <- innate_genes_df[,1:6]
+
+# Fix EntrezID column name
+colnames(innate_genes_df) <- c("InnateDB.Gene.ID", "Gene.Symbol", "Species", "PubMED.ID","Annotation","EntrezID")
+
+
+```{r}
+innate_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/innatedb_innate_genes.csv', header = T, sep = ",", stringsAsFactors = F)
+innate_df <- innate_df[,2:4]
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

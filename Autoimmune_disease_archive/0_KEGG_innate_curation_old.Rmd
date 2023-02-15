@@ -1,0 +1,135 @@
+---
+title: "KEGG_immune_gene_curation"
+author: "Ursula Widocki"
+date: "12/10/2020"
+output: html_document
+---
+
+```{r}
+# KEGG.db: 
+# KEGG R: 
+
+rm(list=ls())
+
+library("tidyverse")
+#library("keggR")
+library("KEGG.db") # Users who want more current data are encouraged to look at the KEGGREST or reactome.db packages
+
+```
+KEGG pathways I need:
+"hsa04062" Chemokine signaling
+"hsa04610" Complement and Coag
+"hsa04611" Platelet Activ.
+"hsa04612" antigen processing and presentation
+"hsa04613" Neutrophil extracellular trap formation
+"hsa04620" TLR signaling pathway
+"hsa04621" NOD-like sig 
+"hsa04622" RIG-I-like signaling
+"hsa04623" Cytosolic DNA sensing
+"hsa04625" C-type lectin signaling
+"hsa04640" Hematopoietic cell lineage 
+"hsa04650" NK cell pediated cytotoxicity 
+"hsa04657" IL-17 signaling 
+"hsa04664" Fc epsilon RI signal path
+"hsa04670" Leuk. Trans. migration
+"hsa04672" Intestinal IgA production
+
+
+
+```{r}
+#looking <- KEGGEXTID2PATHID
+all_Kegg_paths <- KEGGPATHID2EXTID # human paths to Entrez genes
+
+gene_to_path <- KEGGEXTID2PATHID
+
+my_KEGG_paths <- c("hsa04062", "hsa04610","hsa04611", "hsa04612", "hsa04613","hsa04620", " hsa04621", "hsa04622", "hsa04623", "hsa04625", "hsa04640", "hsa04650", "hsa04657", "hsa04664", "hsa04670", "hsa04672")
+
+```
+
+```{r}
+## Get KEGG information
+col_labels <- c("EntrezID", "Symbol", "KEGGpathID", "Database")
+kegg_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(kegg_df) <- col_labels
+
+# to add gene symbols
+gene_human <- read_csv("/Users/ursulawidocki/Desktop/BarabasiLab/Data/gene_human.csv")
+gene_human <- gene_human[,2:3]
+
+#all_Kegg_paths[[my_KEGG_paths[1]]] # to look at Entrez genes
+
+# for each innate immunity pathway
+for (i in seq_len(length(my_KEGG_paths))){
+  # get all genes in pathway i
+  genes <- all_Kegg_paths[[my_KEGG_paths[i]]]
+  
+  for (g in genes){
+    # get gene symbol
+    if(g %in% gene_human$GeneID){
+      sym_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+      
+      # add all info to df
+      temp <- c(g,sym_gene, my_KEGG_paths[i], "KEGG.db")
+      kegg_df[nrow(kegg_df)+1,] <- temp  
+      
+    }
+  }
+}
+
+```
+
+```{r}
+
+## Look at genes that were lost due to conversion
+
+
+#length(unique(kegg_df$Symbol)) # should be 808
+
+```
+
+```{r}
+## Save
+
+write.csv(kegg_df,'/Users/ursulawidocki/Desktop/BarabasiLab/Data/kegg_innate_genes.csv')
+
+```
+
+
+
+
+
+
+
+
+
+
+## Code I didn't use
+
+```{r}
+kegg_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/kegg_innate_genes.csv', header = T, sep = ",")
+kegg_df <- kegg_df[,2:4]
+```
+
+
+```{r}
+# get total number of genes
+
+genes_list <- c(kegg_df$EntrezID)
+
+length(unique(genes_list)) # 799
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

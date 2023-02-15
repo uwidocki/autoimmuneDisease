@@ -1,0 +1,634 @@
+---
+title: "1.0_Data_Separation"
+author: "Ursula Widocki"
+date: "6/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+require(data.table)
+require(scales)
+require(dplyr)
+require(ggplot2)
+require(magrittr)
+require(tidyr)
+require(tibble)
+library(plotly)
+require(igraph)
+`%ni%` <- Negate(`%in%`)
+require(data.table)
+require(tidyr)
+require(dplyr)
+require(magrittr)
+```
+
+```{r}
+alias_dict = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GeneSymbolToAliasANDPreviousNames.txt", 
+                        sep = "\t", stringsAsFactors = F, header = T) # read in alias dict
+
+immune_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", 
+                        sep = "\t", stringsAsFactors = F, header = T, row.names = 1)
+
+GDA_data = read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Data_Clean_Complete.csv", 
+                        sep = ",", stringsAsFactors = F, header = T)
+
+# Read in PPI data
+ppi <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+ppi_df <- ppi[,c("Symbol_A", "Symbol_B")]
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+
+# Check for Gene Aliases
+```{r}
+# count how many times each alias occurs
+gene_dic_filter = alias_dict %>% 
+  group_by(Symbol) %>%
+  mutate(n_symbol = n()) %>%
+  ungroup() %>%
+  group_by(Alias) %>%
+  mutate(n_alias = n()) %>%
+  ungroup()
+
+# keep aliases that only occur once
+df2 = gene_dic_filter %>%
+  filter(n_alias == 1) %>%
+  dplyr::select(Symbol, Alias) %>%
+  unique()
+
+dict = df2 %>%
+  group_by(Alias) %>%
+  mutate(n = n()) #%>%
+  #filter(n > 1)
+
+```
+
+```{r}
+## Get diseases that are immune system diseases or infections
+
+disease_descript = GDA_data %>% dplyr::select(NewName, DescriptorName)
+# breaks up the descriptor names
+tmp = disease_descript$DescriptorName %>% 
+  stringr::str_split("\\|", simplify = TRUE) %>%
+  as.data.frame()
+# match disease with its descriptors
+disease_descript = cbind(disease_descript, tmp) %>%
+  pivot_longer(-NewName) %>% 
+  filter(value != "") %>%
+  filter(name != "DescriptorName") %>% 
+  dplyr::select(-name) %>%
+  unique()
+
+n = disease_descript %>% 
+  # filter(value %in% c("Immune System Diseases" , "Infections" )) %>%
+  group_by(value) %>%
+  mutate(n = n()) %>%
+  ungroup() %>% 
+  group_by(NewName) %>% 
+  mutate(disease_descript = max(n)) %>%
+  # filter(value %in% c("Immune System Diseases" , "Infections" )) %>%
+  filter(n == disease_descript) %>%
+  dplyr::select(-c(n,disease_descript))
+```
+
+```{r}
+# Gets adaptive and innate immunity data from GO and InnateDB
+adapt = immune_data %>% 
+  filter(isAdaptive == 1) %>%
+  dplyr::select(Symbol, GO) %>% 
+  unique()
+innate = immune_data %>% 
+  filter(isInnate == 1) %>%
+  dplyr::select(Symbol, GO, InnateDB) %>% 
+  unique()
+
+# get kegg paths that are in both immune systems
+both_kegg_id = intersect(immune_data$KEGGpathID.innate, immune_data$KEGGpathID.adaptive)
+both_kegg_id = both_kegg_id[!is.na(both_kegg_id)]
+
+# get reactome paths that are in both immune systems
+both_reactome_id = intersect(immune_data$ReactomePathID.innate, immune_data$ReactomePathID.adaptive)
+both_reactome_id = both_reactome_id[!is.na(both_reactome_id)]
+
+# Are there go paths that are in both immune systems? - no
+#both_go_id = intersect(immune_data$GOID.innate, immune_data$GOID.adaptive)
+#both_go_id = both_go_id[!is.na(both_go_id)]
+
+both = immune_data %>%
+  filter((KEGGpathID.adaptive %in% both_kegg_id) | 
+           (ReactomePathName.adaptive %in% both_reactome_id)) %>%
+  dplyr::select(Symbol, KEGG, ReactomeDB) %>%
+  unique()
+adapt_o = immune_data %>% 
+  filter((KEGGpathID.adaptive %ni% both_kegg_id) | 
+            (ReactomePathName.adaptive %in% both_reactome_id)) %>%
+  dplyr::select(Symbol, KEGG, ReactomeDB) %>% 
+  unique()
+innate_o = immune_data %>% 
+  filter((KEGGpathID.innate %ni% both_kegg_id) | 
+            (ReactomePathName.innate %in% both_reactome_id)) %>%
+  dplyr::select(Symbol, KEGG, ReactomeDB) %>% 
+  unique()
+  
+
+# note if genes are in innate or adaptive immunity and match gene with alias
+A_long = adapt %>%
+  pivot_longer(-Symbol, 
+               values_to = "base", 
+               values_drop_na = TRUE) %>%
+  mutate(ID = paste(name, "adapt", sep = ".")) %>% 
+  dplyr::select(ID, Alias = Symbol) 
+
+I_long = innate %>% 
+  pivot_longer(-Symbol, 
+               values_to = "base", 
+               values_drop_na = TRUE) %>%
+  mutate(ID = paste(name, "innate", sep = ".")) %>% 
+  dplyr::select(ID, Alias = Symbol) 
+
+B_long = both %>% 
+  pivot_longer(-Symbol, 
+               values_to = "base", 
+               values_drop_na = TRUE) %>%
+  mutate(ID = paste(name, "both", sep = ".")) %>% 
+  dplyr::select(ID, Alias = Symbol) 
+
+AO_long = adapt_o %>% 
+  pivot_longer(-Symbol, 
+               values_to = "base", 
+               values_drop_na = TRUE) %>%
+  mutate(ID = paste(name, "adapt", sep = ".")) %>% 
+  dplyr::select(ID, Alias = Symbol)
+
+IO_long = innate_o %>% 
+  pivot_longer(-Symbol, 
+               values_to = "base", 
+               values_drop_na = TRUE) %>%
+  mutate(ID = paste(name, "innate", sep = ".")) %>% 
+  dplyr::select(ID, Alias = Symbol)
+
+Long_Immunity = bind_rows(I_long, A_long) %>% bind_rows(., B_long) %>% 
+  bind_rows(., AO_long) %>% bind_rows(., IO_long)
+
+Long_Immunity %<>% 
+  dplyr::left_join(., dict)
+
+Long_Immunity %>%
+  dplyr::select(Symbol, Alias) %>%
+  unique %>%
+  group_by(Alias) %>%
+  summarise(n = n()) %>%
+  filter(n > 1)
+### No genes have multiple names, 
+### So no weird names on the data
+
+Long_Immunity %<>%
+  dplyr::select(NewName = ID, hgnc_symbol = Symbol)
+
+```
+
+```{r}
+final_auto_list <- c(read_tsv(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/autoimmune_disease_naming_scheme.txt", 
+                                col_names = F, col_types = cols())) %>% unlist()
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "thyroiditis autoimmune", 
+                           replacement = "hashimoto disease", fixed = TRUE)
+
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma diffuse", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma systemic", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma limited", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma localized", 
+                           replacement = "scleroderma", fixed = TRUE)
+
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "ophthalmoplegia chronic progressive external", 
+                           replacement = "ophthalmoplegia", fixed = TRUE)
+GDA_data$NewName = unlist(GDA_data$NewName)
+```
+
+```{r}
+# get diseases with 5 or more genes that have Strong or Weak evidence
+Selected_Diseases = GDA_data %>%
+  filter(NewName %in% n$NewName) %>% 
+  filter(Strong > 0 | 
+           Weak > 0 |
+           Incompatible > 0) %>%
+  filter(hgnc_symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  dplyr::select(NewName, hgnc_symbol) %>%
+  unique()
+
+Full = bind_rows(Selected_Diseases, Long_Immunity)
+Full %<>% filter(hgnc_symbol %in% V(ppi_g)$name)
+
+x = Full %>% 
+  group_by(NewName) %>%
+  mutate(n = n()) %>%
+  filter(n > 5) %>%
+  dplyr::select(-n)
+
+require(NetSci) 
+SAB = separation(G = ppi_g, 
+                 ST = x)
+#SAB
+Sep = SAB$Sab %>% as.matrix()
+```
+
+
+```{r}
+# Filter for modules that are close
+Sep[lower.tri(Sep)] = t(Sep)[lower.tri(Sep)]
+S = Sep %>% as.matrix() %>% reshape2::melt()
+S %<>% filter(value < 0)
+
+S$Var1 %<>% as.character()
+S$Var2 %<>% as.character()
+n1 = apply(S[,1:2], 1, min)
+n2 = apply(S[,1:2], 1, max)
+S$Var1 = n1
+S$Var2 = n2
+
+ni = data.frame(NewName = Long_Immunity$NewName, 
+                value = "Immunity Module") %>% unique()
+
+# diseases, 
+Nodes = x %>% 
+  group_by(NewName) %>%
+  summarise(n = n()) %>%
+  dplyr::left_join(., bind_rows(n, ni))
+
+g = S %>%
+  unique() %>%
+  graph_from_data_frame(., directed = F, 
+                        vertices = Nodes) %>%
+  delete.vertices(., degree(.) == 0 )
+
+V(g)$degree = degree(g)
+#V(g)$type = ifelse(V(g)$name %in% unique(final_auto_list), "Autoimmune Disease", "Diseases")
+V(g)$type = ifelse(V(g)$name %in% unique(Long_Immunity$NewName), "Main Immunity", 
+          ifelse(V(g)$name %in% unique(final_auto_list), "Autoimmune Disease", "Diseases"))
+
+V(g)$partition = ifelse(V(g)$name == "GO.innate" | V(g)$name == "GO.adapt", "GO", 
+                        ifelse(V(g)$name == "InnateDB.innate", "InnateDB",
+                               ifelse(V(g)$name == "KEGG.innate" | V(g)$name == "KEGG.adapt" | V(g)$name == "KEGG.both", "KEGG",
+                                      ifelse(V(g)$name == "ReactomeDB.innate" | V(g)$name == "ReactomeDB.adapt" | V(g)$name == "ReactomeDB.both", "ReactomeDB", "Disease"))))
+
+require(ggraph)
+E(g)$weight = abs(E(g)$value)
+
+ggraph(g, 'stress') +
+  geom_edge_hive(aes(width = weight,
+                    alpha = weight)) +
+  geom_node_point(aes(size = degree, 
+                      color = type)) +
+  geom_node_text(aes(label = name,
+                     filter = degree > 5, 
+                     color = type),
+                 # color = '#FFA92D',
+                 size = 3) +
+  scale_edge_width(range = c(0.1, 1)) +
+  theme_void()
+```
+
+```{r}
+# Graph of databases and immune diseases and infections one hop away
+
+disease_close = neighborhood(g, 
+                             order = 1, 
+                             nodes = unique(Long_Immunity$NewName)) %>%
+  unlist() %>%
+  names() %>%
+  unique()
+
+g %>%
+  delete.vertices(V(g)$name %ni% disease_close) %>% 
+  ggraph(., 'fr') +
+  geom_edge_link(aes(width = weight, alpha = weight)) +
+  geom_node_point(aes(size = n, 
+                      color = type)) + 
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     filter = degree > 1, 
+                     color = type,
+                     size = n*0.4)
+                 ) +
+  scale_color_hue(l  = c(10), c = 20) + 
+  scale_edge_width(range = c(0, 3))+
+  scale_size(range = c(2, 8)) + 
+  theme_void() +
+  labs(
+       size = "# of genes", 
+       edge_width = "abs(Sab)", 
+       edge_alpha = "abs(Sab)"
+       )
+
+```
+
+```{r}
+# Graph of databases and immune diseases and infections one hop away
+# Color edges based on what database they are connected to
+
+disease_close = neighborhood(g, 
+                             order = 1, 
+                             nodes = unique(Long_Immunity$NewName)) %>%
+  unlist() %>%
+  names() %>%
+  unique()
+
+E(g)$type <- "Database"
+E(g)[V(g)[partition == "GO"] %--% V(g)[partition == "Disease"]]$type <- "GO"
+E(g)[V(g)[partition == "InnateDB"] %--% V(g)[partition == "Disease"]]$type <- "InnateDB"
+E(g)[V(g)[partition == "KEGG"] %--% V(g)[partition == "Disease"]]$type <- "KEGG"
+E(g)[V(g)[partition == "ReactomeDB"] %--% V(g)[partition == "Disease"]]$type <- "ReactomeDB"
+E(g)[V(g)[partition == "Disease"] %--% V(g)[partition == "Disease"]]$type <- "Disease"
+
+g %>%
+  delete.vertices(V(g)$name %ni% disease_close) %>% 
+  ggraph(., 'fr') +
+  geom_edge_link(aes(width = weight, color = type)) + # removed alpha
+  geom_node_point(aes(size = n, 
+                      color = type)) + # can also color by value
+  #geom_edge_arc(aes(width = weight, alpha = weight, strength = 0.1, lineend = "square")) + 
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     filter = degree > 1, 
+                     color = type,
+                     size = n*0.4)
+                 ) +
+  scale_color_hue(l  = c(10), c = 20) + 
+  scale_edge_width(range = c(0, 3))+
+  scale_size(range = c(2, 8)) + 
+  theme_void() +
+  labs(
+       size = "# of genes", 
+       edge_width = "abs(Sab)", 
+       edge_alpha = "abs(Sab)"
+       )
+
+# add a bend/curve to the edge
+```
+
+```{r}
+disease_close2 = neighborhood(g, 
+                             order = 2, 
+                             nodes = unique(Long_Immunity$NewName)) %>%
+  unlist() %>%
+  names() %>%
+  unique()
+
+
+g %>%
+  delete.vertices(V(g)$name %ni% disease_close2) %>% 
+  ggraph(., 'fr') +
+  geom_edge_link(aes(width = weight,
+                     alpha = weight)) +
+  geom_node_point(aes(size = n, 
+                      color = type)) +
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     filter = n > 200 & degree > 10, 
+                     color = type,
+                     size = n)
+                 # color = '#FFA92D',
+  ) +
+  scale_color_hue(l  = c(10), c = 20) + 
+  scale_edge_width(range = c(0, 3))+
+  scale_size(range = c(2, 8)) + 
+  theme_void()+
+  labs(
+    size = "# of genes", 
+    edge_width = "abs(Sab)", 
+    edge_alpha = "abs(Sab)"
+  )
+
+```
+
+```{r}
+samp<-erdos.renyi.game(10,p=.5)
+E(samp)$weight <- sample(0:3, length(E(samp)),T)
+
+delete.edges(samp, which(E(samp)$weight==0))
+
+plot(samp)
+```
+
+
+```{r}
+disease_go = neighborhood(g, 
+                             order = 1, 
+                             nodes = c("GO.innate", "GO.adapt")) %>%
+  unlist() %>%
+  names() %>%
+  unique()
+
+# to make it a star with GO:
+disease_go = disease_go[!(disease_go %in% c("InnateDB.innate", "KEGG.adapt", "KEGG.both", "KEGG.innate", "ReactomeDB.adapt", "ReactomeDB.both", "ReactomeDB.innate"))]
+sub_go = induced_subgraph(g, disease_go)
+
+sub_go %>%
+  delete.edges(which(E(sub_go)$type == "Disease")) %>%
+  #delete.edges(which(E(sub_go)$type == "Database")) %>%
+  ggraph(., 'fr') +
+  geom_edge_link(aes(#width = weight*1.2,
+                     color = type
+                     )) +
+  geom_node_point(aes(size = n*0.4, 
+                      color = type)) +
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     color = type,
+                     size = n*0.4)
+                 ) +
+  scale_color_hue(l  = c(10), c = 20) + 
+  scale_edge_width(range = c(0, 3))+
+  scale_size(range = c(2, 8)) + 
+  theme_void()+
+  labs(
+       size = "# of genes", 
+       edge_width = "abs(Sab)", 
+       edge_alpha = "abs(Sab)"
+       )
+
+```
+
+```{r}
+disease_innatedb = neighborhood(g, 
+                             order = 1, 
+                             nodes = c("InnateDB.innate")) %>%
+  unlist() %>%
+  names() %>%
+  unique()
+
+# to make it a star with InnateDB:
+disease_innatedb = disease_innatedb[!(disease_innatedb %in% c("GO.innate", "GO.adapt", "KEGG.adapt", "KEGG.both", "KEGG.innate", "ReactomeDB.adapt", "ReactomeDB.both", "ReactomeDB.innate"))]
+sub_innatedb = induced_subgraph(g, disease_innatedb)
+#delete.edges(sub_innatedb, which(E(sub_innatedb)$type == "Disease"))
+
+sub_innatedb %>%
+  delete.edges(which(E(sub_innatedb)$type == "Disease")) %>%
+  ggraph(., 'fr') +
+  geom_edge_link(aes(#width = weight,
+                     color = type
+                     )) +
+  geom_node_point(aes(size = n*0.4, 
+                      color = type)) +
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     color = type,
+                     size = n*0.4)
+                 ) +
+  scale_color_hue(l  = c(10), c = 20) + 
+  scale_edge_width(range = c(0, 3))+
+  scale_size(range = c(2, 8)) + 
+  theme_void()+
+  labs(
+       size = "# of genes", 
+       edge_width = "abs(Sab)", 
+       edge_alpha = "abs(Sab)"
+       )
+```
+
+```{r}
+disease_kegg = neighborhood(g, 
+                             order = 1, 
+                             nodes = c("KEGG.innate", "KEGG.adapt", "KEGG.both")) %>%
+  unlist() %>%
+  names() %>%
+  unique()
+
+# to make it a star with InnateDB:
+disease_kegg = disease_kegg[!(disease_kegg %in% c("GO.innate", "GO.adapt", "InnateDB.innate", "ReactomeDB.adapt", "ReactomeDB.both", "ReactomeDB.innate"))]
+sub_kegg = induced_subgraph(g, disease_kegg)
+
+sub_kegg %>%
+  delete.edges(which(E(sub_kegg)$type == "Disease")) %>%
+  ggraph(., 'fr') +
+  geom_edge_link(aes(#width = weight,
+                     color = type
+                     )) +
+  geom_node_point(aes(size = n*0.4, 
+                      color = type)) +
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     color = type,
+                     size = n*0.4)
+                 ) +
+  scale_color_hue(l  = c(10), c = 20) + 
+  scale_edge_width(range = c(0, 3))+
+  scale_size(range = c(2, 8)) + 
+  theme_void()+
+  labs(
+       size = "# of genes", 
+       edge_width = "abs(Sab)", 
+       edge_alpha = "abs(Sab)"
+       )
+```
+
+```{r}
+disease_reactome = neighborhood(g, 
+                             order = 1, 
+                             nodes = c("ReactomeDB.innate", "ReactomeDB.adapt", "ReactomeDB.both")) %>%
+  unlist() %>%
+  names() %>%
+  unique()
+
+# to make it a star with ReactomeDB:
+disease_reactome = disease_reactome[!(disease_reactome %in% c("GO.innate", "GO.adapt", "InnateDB.innate", "KEGG.adapt", "KEGG.both", "KEGG.innate"))]
+sub_reactome = induced_subgraph(g, disease_reactome)
+
+sub_reactome %>%
+  delete.edges(which(E(sub_reactome)$type == "Disease")) %>% 
+  ggraph(., 'fr') +
+  geom_edge_link(aes(#width = weight,
+                     color = type
+                     )) +
+  geom_node_point(aes(size = n*0.4, 
+                      color = type)) +
+  scale_color_hue(c = c(20)) + 
+  ggnewscale::new_scale("color") + 
+  geom_node_text(aes(label = name,
+                     color = type,
+                     size = n*0.4)
+                 ) +
+  scale_color_hue(l  = c(10), c = 20) + 
+  scale_edge_width(range = c(0, 3))+
+  scale_size(range = c(2, 8)) + 
+  theme_void()+
+  labs(
+       size = "# of genes", 
+       edge_width = "abs(Sab)", 
+       edge_alpha = "abs(Sab)"
+       )
+```
+
+```{r}
+db_sub = induced_subgraph(g, v = disease_close)
+db_edge = cbind(get.edgelist(db_sub), E(db_sub)$weight) %>% 
+  as.data.frame(., stringsAsFactors = F) %>% unique()
+
+# Get db names in right col
+db_list = unique(Long_Immunity$NewName)
+for(p in seq(1:dim(db_edge)[1])){
+  
+  if(db_edge$V2[p] %in% db_list){
+    db_name = db_edge$V2[p]
+    db_edge$V2[p] = db_edge$V1[p]
+    db_edge$V1[p] = db_name
+  }
+}
+
+db_edge = db_edge[which(db_edge$V1 %in% db_list),] # keep db edges
+db_edge = db_edge[which(db_edge$V2 %ni% db_list),] # remove db to db edges
+colnames(db_edge) = c("Databases", "Diseases", "S_ab")
+db_edge$S_ab <- as.numeric(db_edge$S_ab)
+
+#ggplot(db_edge) +
+ #aes(x = V1, y = V2, color = V3) +
+ #geom_tile(size = 1.2, fill = "#46337E", color = "#46337E") +
+ #labs(x = "Database", y = "Disease") +
+ #theme_minimal() + 
+ #theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggplot(db_edge) +
+  aes(x = Databases, y = Diseases, fill = S_ab) +
+  geom_tile() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+

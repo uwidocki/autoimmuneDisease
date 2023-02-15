@@ -1,0 +1,96 @@
+---
+title: "0_original_GDA_naming"
+author: "Ursula Widocki"
+date: "6/9/2021"
+output: html_document
+---
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+library(eulerr) # for venn diagrams, maybe try upSetR instead
+library(gprofiler2) # gene enrichment
+library(dplyr)
+library(stringr)
+library(stringdist)
+library(superheat)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+
+set.seed(123) # for venn diagrams
+
+```
+
+```{r}
+GDA_data <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_18122020_ClassFromDisGeNet.csv", sep = ",", header = T, stringsAsFactors = F)
+GDA_data = GDA_data %>% filter(Strong > 0 | Weak > 0) %>% mutate(DiseaseName = tolower(DiseaseName)) %>% unique()
+
+# Autoimmune Diseases
+autoimmune_diseases <- read_tsv(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/aarda_diseases_20210529.txt", 
+                                col_names = F, col_types = cols()) %>% as.matrix() %>% t() %>% as.data.frame()
+colnames(autoimmune_diseases)[1] <- "AutoDiseases"
+autoimmune_diseases %<>% mutate(AutoDiseases = tolower(AutoDiseases))
+
+
+# PPI
+ppi_df <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df <- ppi_df[,c("Symbol_A", "Symbol_B")]
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g = ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+# Get genes associated with these autoimmune diseases
+```{r}
+# Get list of diseases in GDA data
+# clean gene names
+
+doesItWork_auto = gsub(pattern = "-", replacement = " ", x = autoimmune_diseases$AutoDiseases , ignore.case = T)
+doesItWork_auto = gsub("[^0-9A-Za-z ]","" , doesItWork_auto,ignore.case = TRUE)
+auto_disease_unique = unique(doesItWork_auto)
+
+doesItWork_GDA = gsub(pattern = "-", replacement = " ", x = GDA_data$DiseaseName, ignore.case = T)
+doesItWork_GDA = gsub("[^0-9A-Za-z ]","" , doesItWork_GDA, ignore.case = TRUE)
+GDA_disease_unique = unique(doesItWork_GDA)
+
+name_dist = stringdistmatrix(a = auto_disease_unique, b = GDA_disease_unique, method = "cosine")
+name_dist = name_dist %>% as.data.frame()
+rownames(name_dist) = auto_disease_unique
+colnames(name_dist) = GDA_disease_unique
+
+```
+
+```{r}
+# look at the disease name distances using just cosine
+
+potential_names_GDA = c()
+
+for(i in seq(1:dim(name_dist)[1])){
+  for(j in seq(1:dim(name_dist)[2])){
+    if(name_dist[i,j] <= 0.03){
+      print(paste0("Row: ",  rownames(name_dist)[i], " Col: ",  colnames(name_dist)[j]))
+      potential_names_GDA = c(potential_names_GDA, colnames(name_dist)[j])
+    }
+  }
+}
+
+length(unique(potential_names_GDA))
+# cosine 0.01 : 31 no false-pos
+# cosine 0.02 : 34 no false-pos
+# cosine 0.03 : 34 no false-pos
+
+```
+
+
+
+
+
+

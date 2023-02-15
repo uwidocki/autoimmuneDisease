@@ -1,0 +1,105 @@
+---
+title: "1.2_Innate_Auto_rawDisGeNET"
+author: "Ursula Widocki"
+date: "5/14/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+library(MeSH.db)
+library(MeSH.AOR.db)
+library(VennDiagram)
+library(gprofiler2)
+library(stringdist)
+library(dplyr)
+source("/Users/ursulawidocki/Desktop/BarabasiLab//NetMedTools.R")
+
+
+```
+
+```{r}
+all_genes_df <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/all_genes.tsv", header = T, sep = "\t", stringsAsFactors = F)
+
+ppi_df <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df <- ppi_df[,c("Symbol_A", "Symbol_B")]
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g = ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+# Get MeSH terms
+```{r}
+## Filter by Immune System Disease
+
+autoimmune_key <- "D001327"
+
+# gets meshids of autoimmune diseases
+auto_dis_ids <- MeSHDbi::select(MeSH.AOR.db, keys = autoimmune_key, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+auto_dis_ids_2 <- MeSHDbi::select(MeSH.AOR.db, keys = auto_dis_ids$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+auto_dis_ids_3 <- MeSHDbi::select(MeSH.AOR.db, keys = auto_dis_ids_2$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+auto_dis_ids_4 <- MeSHDbi::select(MeSH.AOR.db, keys = auto_dis_ids_3$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR")
+
+#auto_dis_ids_5 <- select(MeSH.AOR.db, keys = auto_dis_ids_4$OFFSPRING, columns = c("ANCESTOR", "OFFSPRING"), keytype = "ANCESTOR") # 0
+
+all_terms <- rbind(auto_dis_ids,auto_dis_ids_2) %>% rbind(., auto_dis_ids_3) %>% rbind(., auto_dis_ids_4)
+```
+
+```{r}
+# gets names of autoimmune diseases
+parent_names <- MeSHDbi::select(MeSH.db, keys = all_terms$ANCESTOR, columns = c("MESHTERM"), keytype = "MESHID")
+offspring_names <- MeSHDbi::select(MeSH.db, keys = all_terms$OFFSPRING, columns = c("MESHTERM"), keytype = "MESHID")
+
+# make df of all names of autoimmune diseases
+all_autodisease_names <- rbind(parent_names, offspring_names) %>% mutate(MESHTERM = tolower(MESHTERM)) %>% unique()
+
+```
+
+```{r}
+# get their GDA data
+meshID_all = c(all_terms$ANCESTOR, all_terms$OFFSPRING, autoimmune_key) %>% unique()
+disgenNet_testing = disease2gene(disease = meshID_all, vocabulary = "MESH", database = "CURATED", verbose = TRUE)
+
+
+results <- extract(disgenNet_testing)
+
+# look at how many MeSH terms are naturally found
+
+# using distance 0.01
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

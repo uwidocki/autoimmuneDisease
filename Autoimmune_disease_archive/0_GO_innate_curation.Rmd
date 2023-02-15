@@ -1,0 +1,145 @@
+---
+title: "Untitled"
+author: "Ursula Widocki"
+date: "12/10/2020"
+output: html_document
+---
+
+####################################################################
+# Gets innate immunity genes using GO.db
+#
+####################################################################
+
+
+```{r}
+# Manual: https://bioconductor.org/packages/release/data/annotation/html/GO.db.html
+
+rm(list=ls())
+
+```
+
+```{r}
+library(tidyverse)
+library(org.Hs.eg.db)
+library(GO.db)
+library(biomaRt)
+```
+
+Innate immune response: GO:0045087, GO:0002226
+
+```{r}
+go_id = GOID( GOTERM[ Term(GOTERM) == "innate immune response"]) # all GO IDs for innate immune response
+#GOID( GOTERM[ Term(GOTERM) == "GO:0045089"])
+
+
+# OFFSPRING consists of children of GO terms and all of their
+
+offspring <- as.list(GOBPOFFSPRING)
+offspring <- offspring[!is.na(offspring)]
+
+innate_offspring = c(go_id, offspring$`GO:0045087`) # all child paths of innate immune response
+
+```
+
+```{r}
+
+col_labels <- c("Symbol", "GO", "GOID", "GOpathName")
+go_df <- data.frame(matrix(ncol = 4, nrow = 0))
+colnames(go_df) <- col_labels
+
+goterms <- Term(GOTERM)
+for(pathid in innate_offspring){
+  print(pathid)
+  is_error = try(unique(get(pathid, org.Hs.egGO2ALLEGS)))
+  if(class(is_error) != "try-error"){ # some pathways do not have genes noted
+    allegs = unique(get(pathid, org.Hs.egGO2ALLEGS))
+    genes_in_path = unlist(mget(allegs, org.Hs.egSYMBOL))
+  
+    ind <- which(innate_offspring == pathid)
+    term = goterms[innate_offspring[ind]]
+  
+    for (gene in genes_in_path){
+      ind <- which(genes_in_path == gene)
+      new_line <- c(gene, "1", pathid, term)
+      go_df[nrow(go_df)+1,] <- new_line
+    }
+  }
+}
+```
+
+
+```{r}
+## Saves the df to integrate information later
+
+write.csv(go_df,'/Users/ursulawidocki/Desktop/BarabasiLab/Data/godb_innate_genes.csv')
+
+```
+
+
+
+
+
+
+
+
+################################################# Code I did not use
+```{r}
+
+##### OLD WAY
+## Gets all genes involved in innate immune response
+
+ # EntrezIDs
+
+genes = unlist(mget(allegs,org.Hs.egSYMBOL)) # gene symbol
+
+for (gene in genes){
+  ind <- which(genes == gene)
+  temp <- c(allegs[ind[1]], gene, go_id, "GO.DB")
+  go_df[nrow(go_df)+1,] <- temp
+  
+}
+
+## Remove repeated rows
+#go_df[duplicated(go_df),] # view duplicates
+
+go_df <- go_df[!duplicated(go_df),]
+#go_df <- unique(go_df)
+
+
+```
+
+
+
+## Reads the data to look at it
+
+```{r}
+go_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/godb_innate_genes.csv', header = T, sep = ",")
+go_df <- go_df[,2:5]
+```
+
+```{r}
+# get total number of genes
+
+genes_list <- c(go_df$EntrezID)
+
+length(unique(genes_list)) # 1008
+```
+  
+```{r}
+
+ensembl = useMart("ensembl", dataset="hsapiens_gene_ensembl") # uses human ensembl annotations
+#gets gene symbol, transcript_id and go_id for all genes annotated with GO:0007507
+gene.data <- getBM(attributes=c('entrezgene_id', 'ensembl_transcript_id', 'with_go'), 
+                   filters = "with_go", values = 'GO:0007507', mart = ensembl)
+
+```
+
+
+```{r}
+xx <- as.list(GOBPCHILDREN)
+temp = xx$`GO:0045089`
+temp2 = xx$`GO:0002226` # no children for secondary ID
+
+```
+
+

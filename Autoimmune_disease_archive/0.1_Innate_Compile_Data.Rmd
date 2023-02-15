@@ -1,0 +1,703 @@
+---
+title: "0.1_Compile_Data"
+author: "Ursula Widocki"
+date: "6/7/2021"
+output: html_document
+---
+#################################################################################################
+# Makes the Immunity database
+# 
+#################################################################################################
+
+```{r setup, include=FALSE}
+rm(list = ls())
+```
+
+```{r}
+library(tidyverse)
+library(igraph)
+library(dplyr)
+require(magrittr)
+```
+
+```{r}
+# Read in innate immunity data
+
+go_i_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/godb_innate_genes.csv', 
+                    header = T, sep = ",", row.names = 1, stringsAsFactors = F)
+innate_i_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/innatedb_innate_genes.csv', 
+                        header = T, sep = ",", row.names = 1, stringsAsFactors = F)
+kegg_i_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/kegg_innate_genes.csv', 
+                      header = T, sep = ",", row.names = 1, stringsAsFactors = F)
+reactome_i_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/reactome_innate_genes.csv', 
+                          header = T, sep = ",", row.names = 1, stringsAsFactors = F)
+
+```
+
+```{r}
+# Read in adaptive immunity data
+
+go_a_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/godb_adaptive_genes.csv', 
+                    header = T, sep = ",", row.names = 1, stringsAsFactors = F)
+kegg_a_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/kegg_adaptive_genes.csv', 
+                      header = T, sep = ",", row.names = 1, stringsAsFactors = F)
+reactome_a_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/reactome_adaptive_genes.csv', 
+                          header = T, sep = ",", row.names = 1, stringsAsFactors = F)
+
+```
+
+```{r}
+## Join all innate immunity dfs
+full_i_join <- plyr::join_all(list(go_i_df, innate_i_df, kegg_i_df, reactome_i_df), type = "full")
+full_i_join$isInnate = 1 # add a column to designate this is Innate Immunity 
+colnames(full_i_join) <- c("Symbol" ,"GO", "GOID.innate", 
+                           "GOpathName,innate", "InnateDBpathName", "InnateDB" , "KEGG", 
+                           "KEGGpathID.innate", "KEGGpathName.innate", "ReactomePathName.innate",
+                           "ReactomePathID.innate", "ReactomeDB", "isInnate")
+
+## Join all adaptive immunity dfs
+full_a_join <- plyr::join_all(list(go_a_df, kegg_a_df, reactome_a_df), type = "full")
+full_a_join$isAdaptive = 1 # add a column to designate this is Adaptive Immunity 
+colnames(full_a_join) <- c("Symbol" ,"GO" ,"GOID.adaptive" ,"GOpathName.adaptive" ,"KEGG" ,
+                           "KEGGpathID.adaptive" ,"KEGGpathName.adaptive" ,"ReactomePathName.adaptive" ,
+                           "ReactomePathID.adaptive" ,"ReactomeDB" ,"isAdaptive")
+
+
+```
+
+```{r}
+## Combine all immunity datasets
+full_join <- plyr::join_all(list(full_i_join, full_a_join), type = "full")
+
+full_join$isInnate[is.na(full_join$isInnate)] = 0
+full_join$isAdaptive[is.na(full_join$isAdaptive)] = 0
+
+# In the database columns, make NA into 0
+full_join$GO[is.na(full_join$GO)] = 0
+full_join$KEGG[is.na(full_join$KEGG)] = 0
+full_join$InnateDB[is.na(full_join$InnateDB)] = 0
+full_join$ReactomeDB[is.na(full_join$ReactomeDB)] = 0
+
+# makes sure only unique entries stay
+full_join <- full_join %>% unique() # makes sure only unique entries stay
+
+```
+
+```{r}
+write.table(full_join, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all.tsv", sep = "\t", row.names = T, col.names = T)
+```
+
+
+
+```{r}
+# which are in both innate and adaptive?
+
+sub = full_join %>%
+  filter(isAdaptive == 1) %>%
+  filter(ReactomeDB == 1)
+
+length(unique(sub$Symbol))
+
+```
+
+
+
+
+
+
+
+
+
+####################################################### Code I didn't use (Code that is here but shouldn't be)
+```{r}
+go <- gene_in_each[gene_in_each$GO == "GO.DB","Symbol"] %>% unique()
+go <- go[!is.na(go)]
+kegg <- gene_in_each[gene_in_each$KEGG == "KEGG.db","Symbol"] %>% unique()
+kegg <- kegg[!is.na(kegg)]
+innatedb <- gene_in_each[gene_in_each$InnateDB == "InnateDB","Symbol"] %>% unique()
+innatedb <- innatedb[!is.na(innatedb)]
+reactome <- gene_in_each[gene_in_each$ReactomeDB == "ReactomeDB","Symbol"] %>% unique()
+reactome <- reactome[!is.na(reactome)]
+
+fit <- euler(list(GO = go, KEGG = kegg, InnateDB = innatedb, ReactomeDB = reactome))
+
+# Customize colors, remove borders, bump alpha, color labels white
+plot(fit,
+     fills = list(fill = c("red", "steelblue4", "turquoise3", "violet"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     shape = "ellipse")
+```
+
+```{r}
+intersect_maybe = gene_in_each %>% drop_na()
+```
+
+```{r}
+go <- gene_in_each[gene_in_each$GO == "GO.DB","Symbol"] %>% unique()
+go <- go[!is.na(go)]
+kegg <- gene_in_each[gene_in_each$KEGG == "KEGG.db","Symbol"] %>% unique()
+kegg <- kegg[!is.na(kegg)]
+innatedb <- gene_in_each[gene_in_each$InnateDB == "InnateDB","Symbol"] %>% unique()
+innatedb <- innatedb[!is.na(innatedb)]
+
+fit <- euler(list(GO = go, KEGG = kegg, InnateDB = innatedb))
+
+# Customize colors, remove borders, bump alpha, color labels white
+plot(fit,
+     fills = list(fill = c("red", "steelblue4", "turquoise3"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     shape = "ellipse")
+```
+
+Without ReactomeDB, the intersect of the three relatively close databases is not all too different from the intersect with all four databases (126 vs 121, respectively).
+
+```{r}
+
+# Prepare a palette of 3 colors with R colorbrewer:
+library(RColorBrewer)
+myCol <- brewer.pal(4, "Pastel2")
+
+venn.diagram(
+        x = list(go, innatedb, kegg, reactome),
+        category.names = c("GO" , "InnateDB" , "KEGG", "ReactomeBD"),
+        filename = '#14_venn_diagramm.png',
+        output=TRUE,
+        
+        # Circles
+        lty = 'blank',
+        fill = myCol,
+        
+        # Numbers
+        cex = .7,
+        fontface = "bold",
+        fontfamily = "sans",
+        
+        # Set names
+        cat.cex = 0.7,
+        cat.fontface = "bold",
+        cat.default.pos = "outer",
+        cat.fontfamily = "sans"
+)
+```
+
+# Jaccard Index of each database
+```{r}
+Similarity_normalized = function(GDA){
+  g =  GDA %>% graph_from_data_frame(, directed = F)
+  
+  V(g)$type <- bipartite_mapping(g)$type
+  # get the incidence matrix (or adjacency, depending on how the data was structured)
+  A = as_incidence_matrix(g) %>% as.matrix()
+  gg =   (A)  %*% Rfast::transpose(A)
+  
+  names(gg) = colnames(gg) = rownames(A)
+  NORM = matrix(NA, ncol = ncol(gg), nrow = nrow(gg))
+  # Normalize the values
+  ADJ_for_DIS2DIS = gg
+  pb <- txtProgressBar(min = 0, max = (ncol(NORM)), style = 3)
+  for( i in 1:ncol(NORM)){
+    setTxtProgressBar(pb, i)
+    for(j in i:(nrow(NORM))){
+      NORM[i,j] = NORM[j,i] = ADJ_for_DIS2DIS[i,j]/(ADJ_for_DIS2DIS[i,i]+ADJ_for_DIS2DIS[j,j]-ADJ_for_DIS2DIS[i,j])
+    }
+  }
+  close(pb)
+  
+  Genes = diag(gg) %>% as.data.frame()
+  Genes$ID = row.names(Genes)
+  Genes$prop = (Genes$./ sum(Genes$.) )%>% CoDiNA::normalize()
+  Genes$Count = Genes$.
+  Genes = Genes[,-1]
+  # Transform into a edge list
+  rownames(NORM) = colnames(gg)
+  colnames(NORM) = colnames(gg)
+  G = NORM %>% wTO::wTO.in.line() 
+  names(G)[3]="weight"
+  
+  return(G)
+}
+
+```
+
+```{r}
+## Jaccard of db
+
+Data_db = go_df[,c("Symbol", "GO")] %>% unique()
+colnames(Data_db)[2] = "Database"
+temp = kegg_df[,c("Symbol", "KEGG")] %>% unique()
+colnames(temp)[2] = "Database"
+Data_db = rbind(Data_db, temp)
+temp = innate_df[,c("Symbol", "InnateDB")] %>% unique()
+colnames(temp)[2] = "Database"
+Data_db = rbind(Data_db, temp)
+temp = reactome_df[,c("Symbol", "ReactomeDB")] %>% unique()
+colnames(temp)[2] = "Database"
+Data_db = rbind(Data_db, temp)
+Data_db = Data_db[c("Database", "Symbol")]
+
+
+jacc_db <- Similarity_normalized(Data_db)
+# make the Node columns string since it will treat EntrezIDs as ints
+jacc_db$Node.1 <- as.character(jacc_db$Node.1)
+jacc_db$Node.2 <- as.character(jacc_db$Node.2)
+jacc_db$weight <- as.numeric(jacc_db$weight)
+
+jacc_db_g <- graph.data.frame(jacc_db)
+jacc_db_mat <- as.matrix(get.adjacency(jacc_db_g, attr='weight'))
+jacc_db_mat <- jacc_db_mat + t(jacc_db_mat)
+diag(jacc_db_mat) <- 1
+#heatmap(jacc_path_mat, scale = "none")
+superheat(jacc_db_mat, pretty.order.rows = T, pretty.order.cols=T, scale=F, heat.pal = c("white", "red"))
+
+```
+
+```{r}
+
+bin_GO = which(genes_in_each)
+
+# jaccard(<binary of GO>, <binary of y>)
+
+```
+
+
+# Do each db make an LCC?
+
+```{r}
+## GO LCC with all genes
+
+#go_df <- subset(all_genes_df, all_genes_df$GO == "GO.DB")
+# get GO genes that are the PPI
+genes_go <- go_df[!duplicated(go_df$Symbol), "Symbol"] # has UBC
+genes_go = genes_go[genes_go %in% V(ppi_g)$name]
+
+LCC_go = LCC_signif(G = ppi_g, targets = genes_go, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_go$size, LCC_go$distribution)
+hist(LCC_go$distribution, main = "GO LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_go$size, col = "red")
+
+```
+
+```{r}
+## Distribution of degrees of genes removes from above (isolated nodes)
+
+go_graph <- induced_subgraph(ppi_g, genes_go)
+# get genes that are just in the LCC and remove genes that are isolated
+temp <- components(go_graph)$membership
+inLCC_go = names(temp[temp == 1])
+nonLCC_go = names(temp[temp != 1])
+
+nonLCC_go = names(temp[temp != 1])
+not_go_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_go)
+
+not_LCC_go_df <- not_go_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_go_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in LCC (GO)") +
+  theme_minimal()
+
+## Degree distribution of genes in the LCC
+
+LCC_go_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_go) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_go_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in LCC (GO)") +
+  theme_minimal()
+```
+
+
+
+
+## Looking Only at Innate DB
+
+```{r}
+## InnateDB with all genes
+
+#innate_df <- subset(all_genes_df, all_genes_df$InnateDB == "InnateDB")
+# get genes that are the PPI
+genes_innate <- innate_df[!duplicated(innate_df$Symbol), "Symbol"]
+genes_innate = genes_innate[genes_innate %in% V(ppi_g)$name]
+
+LCC_innate = LCC_signif(G = ppi_g, targets = genes_innate, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_innate$size, LCC_innate$distribution)
+hist(LCC_innate$distribution, main = "InnateDB LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_innate$size, col = "red")
+
+```
+
+```{r}
+## Distribution of degrees of genes removes from above (isolated nodes)
+innatedb_graph <- induced_subgraph(ppi_g, genes_innate)
+temp <- components(innatedb_graph)$membership
+nonLCC_innate = names(temp[temp != 1])
+inLCC_innate = names(temp[temp == 1])
+
+not_innate_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_innate)
+
+not_LCC_innate_df <- not_innate_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_innate_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in LCC (InnateDB)") +
+  theme_minimal()
+
+# degree distribution of genes in the LCC
+
+LCC_innate_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_innate) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# plot degrees of nodes in PPI
+ggplot(LCC_innate_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Genes in LCC (InnateDB)") +
+  theme_minimal()
+```
+
+
+
+
+
+## Looking Only at KEGG
+
+```{r}
+## KEGG LCC with all genes
+
+#kegg_df <- subset(all_genes_df, all_genes_df$KEGG == "KEGG.db")
+# get KEGG genes that are the PPI
+genes_kegg <- kegg_df[!duplicated(kegg_df$Symbol), "Symbol"]
+genes_kegg = genes_kegg[genes_kegg %in% V(ppi_g)$name]
+
+LCC_kegg = LCC_signif(G = ppi_g, targets = genes_kegg, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_kegg$size, LCC_kegg$distribution)
+hist(LCC_kegg$distribution, main = "KEGG LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_kegg$size, col = "red")
+```
+
+```{r}
+## Distribution of degrees of genes removes from above (isolated nodes)
+kegg_graph <- induced_subgraph(ppi_g, genes_kegg)
+temp <- components(kegg_graph)$membership
+nonLCC_kegg = names(temp[temp != 1])
+inLCC_kegg = names(temp[temp == 1])
+
+not_kegg_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_kegg)
+
+not_LCC_df <- not_kegg_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in LCC (KEGG)") +
+  theme_minimal()
+
+## Degree distribution of genes in the LCC
+
+LCC_kegg_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_kegg) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_kegg_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in LCC (KEGG)") +
+  theme_minimal()
+```
+
+
+
+## Looking Only at Reactome
+
+```{r}
+## ReactomeDB LCC with all genes
+
+#reactome_df <- subset(all_genes_df, all_genes_df$ReactomeDB == "ReactomeDB")
+# Get ReactomeDB genes that are the PPI
+genes_reactome <- reactome_df[!duplicated(reactome_df$Symbol), "Symbol"]
+genes_reactome = genes_reactome[genes_reactome %in% V(ppi_g)$name]
+
+LCC_reactome = LCC_signif(G = ppi_g, targets = genes_reactome, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+# Plotting
+lim = c(LCC_reactome$size, LCC_reactome$distribution)
+hist(LCC_reactome$distribution, main = "ReactomeDB LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_reactome$size, col = "red")
+```
+
+```{r}
+## Distribution of degrees of genes removes from above (isolated nodes)
+reactome_graph <- induced_subgraph(ppi_g, genes_reactome)
+temp <- components(reactome_graph)$membership
+nonLCC_reactome = names(temp[temp != 1])
+inLCC_reactome = names(temp[temp == 1])
+
+not_reactome_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_reactome)
+
+not_LCC_df <- not_reactome_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in LCC (ReactomeDB)") +
+  theme_minimal()
+
+# degree distribution of genes in the LCC
+
+LCC_reactome_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_reactome) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# plot degrees of nodes in PPI
+ggplot(LCC_reactome_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in LCC (ReactomeDB)") +
+  theme_minimal()
+```
+
+
+
+
+############# Now let's plot some of these distributions together
+
+Now, let's plot the database distributions together
+```{r}
+plot_go <- hist(LCC_go$distribution)    
+plot_innate <- hist(LCC_innate$distribution)   
+plot_kegg <- hist(LCC_kegg$distribution)
+plot_reactome <- hist(LCC_reactome$distribution)
+
+plot( plot_go, col=rgb(0,1,0,1/2), border = F, xlim = c(450,1650), ylim = c(0, 300), main = "Histogram of Innate Immunity Database LCC Distributions")  # first histogram
+plot( plot_innate, col=scales::alpha('red',.5), add=T, border = F)
+plot( plot_kegg, col=scales::alpha('skyblue',.5),  add=T, border = F)
+plot( plot_reactome, col=rgb(0,0,1,1/4),  add=T, border = F)
+legend("top", c("GO", "InnateDB","KEGG", "ReactomeDB"), col=c(rgb(0,1,0,1/2), "red", "skyblue", rgb(0,0,1,1/4)), lwd=10)
+```
+
+# Separation of these LCCs
+
+```{r}
+# Bind the gene and labels together
+go_temp = go_df[,c("Symbol", "GO")] %>% na.omit()
+colnames(go_temp)[2] = "Label"
+innatedb_temp = innate_df[,c("Symbol", "InnateDB")] %>% na.omit()
+colnames(innatedb_temp)[2] = "Label"
+kegg_temp = kegg_df[,c("Symbol", "KEGG")] %>% na.omit()
+colnames(kegg_temp)[2] = "Label"
+reactome_temp = reactome_df[,c("Symbol", "ReactomeDB")] %>% na.omit()
+colnames(reactome_temp)[2] = "Label"
+
+
+sep_labels = rbind(go_temp, innatedb_temp) %>% rbind(., kegg_temp) %>% rbind(., reactome_temp)
+
+# Calc. Sep.
+all_sep = module_sep(ppi_g, sep_labels)
+
+sab_all = all_sep$Sab
+sab_all[is.na(sab_all)] <- 0 # make NA 0
+sab_all = sab_all + t(sab_all)
+
+superheat(sab_all, pretty.order.rows = T, pretty.order.cols = T, bottom.label.text.angle = 90, heat.pal = c("blue", "white", "red"), left.label.text.size = 2, bottom.label.text.size = 3, heat.pal.values = c(0, 0.22, 1) )
+```
+
+# Look at separation as a network
+```{r}
+
+```
+
+
+
+# Does innate immunity as a whole make a module?
+```{r}
+genes_all <- gene_in_each[!duplicated(gene_in_each$Symbol), "Symbol"]
+genes_all = genes_all[genes_all %in% V(ppi_g)$name]
+
+LCC_all_innate = LCC_signif(G = ppi_g, targets = genes_all, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+# Plotting
+lim = c(LCC_all_innate$size, LCC_all_innate$distribution)
+hist(LCC_all_innate$distribution, main = "All Innate Databases LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_all_innate$size, col = "red")
+```
+
+```{r}
+## Distribution of degrees of genes removes from above (isolated nodes)
+all_innate_graph <- induced_subgraph(ppi_g, genes_all)
+temp <- components(all_innate_graph)$membership
+nonLCC_all_innate = names(temp[temp != 1])
+inLCC_all_innate = names(temp[temp == 1])
+
+not_all_innate_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_all_innate)
+
+not_LCC_df <- not_all_innate_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in LCC") +
+  theme_minimal()
+
+# degree distribution of genes in the LCC
+
+LCC_all_innate_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_all_innate) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# plot degrees of nodes in PPI
+ggplot(LCC_all_innate_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in LCC") +
+  theme_minimal()
+```
+
+
+
+
+
+
+
+
+```{r}
+
+sum(which(gene_in_each$Symbol %in% alias_dict$key)) # 2095999291
+sum(which(gene_in_each$Symbol %in% alias_dict$GeneName)) # 4159453519
+length(unique(gene_in_each$Symbol)) # 2811
+length(unique(alias_dict$key)) # 413500
+
+```
+
+
+```{r}
+# make gene_in_each long
+temp = gene_in_each[,c("Symbol", "GO", "KEGG", "InnateDB", "ReactomeDB")] %>% unique() # add pathways later
+all_genes_long = pivot_longer(temp, 
+                              cols = c("GO", "KEGG", "InnateDB", "ReactomeDB"), 
+                              )
+all_genes_long$value2 = ifelse(is.na(all_genes_long$value), 0, 1)
+all_genes_long$key = all_genes_long$Symbol
+
+# merge alias_dict
+temp = dplyr::left_join(all_genes_long, alias_dict)
+
+# remove column with old gene names
+temp_subset = temp[,c("GeneName", "value2", "name")] %>% unique() %>% na.omit()
+
+new_map = temp_subset %>% pivot_wider(., names_from = name, 
+                            values_from = value2, 
+                            values_fn = length, 
+                            values_fill = 0)
+```
+
+```{r}
+go <- temp_subset[temp_subset$value == "GO.DB",c("key")] %>% unique()
+go <- go[!is.na(go)]
+kegg <- temp_subset[temp_subset$value == "KEGG.db",c("key")] %>% unique()
+kegg <- kegg[!is.na(kegg)]
+innatedb <- temp_subset[temp_subset$value == "InnateDB",c("key")] %>% unique()
+innatedb <- innatedb[!is.na(innatedb)]
+reactome <- temp_subset[temp_subset$value == "ReactomeDB",c("key")] %>% unique()
+reactome <- reactome[!is.na(reactome)]
+
+fit <- euler(list(GO = go, KEGG = kegg, InnateDB = innatedb, ReactomeDB = reactome))
+
+# Customize colors, remove borders, bump alpha, color labels white
+plot(fit,
+     fills = list(fill = c("red", "steelblue4", "turquoise3", "violet"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     shape = "ellipse")
+```
+
+```{r}
+go1 <- temp_subset[temp_subset$value == "GO.DB",c("GeneName")] %>% unique()
+go1 <- go1[!is.na(go1)]
+kegg1 <- temp_subset[temp_subset$value == "KEGG.db",c("GeneName")] %>% unique()
+kegg1 <- kegg1[!is.na(kegg1)]
+innatedb1 <- temp_subset[temp_subset$value == "InnateDB",c("GeneName")] %>% unique()
+innatedb1 <- innatedb1[!is.na(innatedb1)]
+reactome1 <- temp_subset[temp_subset$value == "ReactomeDB",c("GeneName")] %>% unique()
+reactome1 <- reactome1[!is.na(reactome1)]
+
+fit1 <- euler(list(GO = go1, KEGG = kegg1, InnateDB = innatedb1, ReactomeDB = reactome1))
+
+# Customize colors, remove borders, bump alpha, color labels white
+plot(fit1,
+     fills = list(fill = c("red", "steelblue4", "turquoise3", "violet"), alpha = 0.4),
+     labels = list(col = "white", font = 4),
+     quantities = T, 
+     shape = "ellipse")
+```
+
+```{r}
+
+# maybe even look at which database benefits most from this alias conversion
+```
+
+```{r}
+# do database separation and then make a network
+
+
+
+```
+
+
+
+

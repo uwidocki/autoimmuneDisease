@@ -1,0 +1,446 @@
+---
+title: "0_Autoimmune_Diseases"
+author: "Ursula Widocki"
+date: "6/6/2021"
+output: html_document
+---
+
+###############################################################################################
+# This file uses the old GDA data, I think?
+# Rewriting/ renaming of autoimmune diseases
+#
+# idk, this file is a mess
+#
+###############################################################################################
+
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+library(eulerr) # for venn diagrams, maybe try upSetR instead
+library(gprofiler2) # gene enrichment
+library(dplyr)
+library(stringr)
+library(stringdist)
+library(superheat)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+
+set.seed(123) # for venn diagrams
+
+```
+
+```{r}
+GDA_data <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_18122020_ClassFromDisGeNet.csv", sep = ",", header = T, stringsAsFactors = F)
+GDA_data = GDA_data %>% filter(Strong > 0 | Weak > 0) %>% mutate(DiseaseName = tolower(DiseaseName)) %>% unique()
+
+# Autoimmune Diseases
+autoimmune_diseases <- read_tsv(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/aarda_diseases_20210529.txt", 
+                                col_names = F, col_types = cols()) %>% as.matrix() %>% t() %>% as.data.frame()
+colnames(autoimmune_diseases)[1] <- "AutoDiseases"
+autoimmune_diseases %<>% mutate(AutoDiseases = tolower(AutoDiseases))
+
+
+# PPI
+ppi_df <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df <- ppi_df[,c("Symbol_A", "Symbol_B")]
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g = ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+```{r}
+# Get list of diseases in GDA data
+# clean gene names
+
+doesItWork_auto = gsub(pattern = "-", replacement = " ", x = autoimmune_diseases$AutoDiseases , ignore.case = T)
+doesItWork_auto = gsub("[^0-9A-Za-z ]","" , doesItWork_auto,ignore.case = TRUE)
+auto_disease_unique = unique(doesItWork_auto)
+
+doesItWork_GDA = gsub(pattern = "-", replacement = " ", x = GDA_data$NewName, ignore.case = T)
+doesItWork_GDA = gsub("[^0-9A-Za-z ]","" , doesItWork_GDA, ignore.case = TRUE)
+GDA_disease_unique = unique(doesItWork_GDA)
+
+name_dist = stringdistmatrix(a = auto_disease_unique, b = GDA_disease_unique, method = "cosine")
+name_dist = name_dist %>% as.data.frame()
+rownames(name_dist) = auto_disease_unique
+colnames(name_dist) = GDA_disease_unique
+
+```
+
+
+```{r}
+# look at the disease name distances using just cosine
+
+potential_names_GDA = c()
+
+for(i in seq(1:dim(name_dist)[1])){
+  for(j in seq(1:dim(name_dist)[2])){
+    if(name_dist[i,j] <= 0.01){
+      #print(paste0("Row: ",  rownames(name_dist)[i], " Col: ",  colnames(name_dist)[j]))
+      potential_names_GDA = c(potential_names_GDA, colnames(name_dist)[j])
+    }
+  }
+}
+
+length(unique(potential_names_GDA))
+# cosine 0.01 : 47
+# cosine 0.02 : 53 -> no false pos
+# costine 0.03 : 56 -> 2 false pos
+
+# also tried qgram at 0.01 : 34
+# tanimoto 44
+```
+
+## Diseases that matched (GDA name): 
+"addison disease",
+"agammaglobulinemia",
+"alopecia areata",
+"amyloidosis",
+"antiphospholipid syndrome",
+"hepatitis autoimmune",
+"pemphigoid bullous",
+"castleman disease",
+"celiac disease",
+"chagas disease",
+"dermatomyositis",
+"endometriosis",
+"eosinophilic esophagitis",
+"giant cell arteritis",
+"glomerulonephritis",
+"granulomatosis with polyangiitis",
+"graves disease",
+"guillain barre syndrome",
+"anemia hemolytic",
+"purpura schoenlein henoch",
+"hidradenitis suppurativa",
+"myositis inclusion body",
+"cystitis interstitial",
+"arthritis juvenile",
+"multiple sclerosis",
+"myasthenia gravis",
+"myositis",
+"narcolepsy",
+"neuromyelitis optica",
+"neutropenia",
+"optic neuritis",
+"pemphigus",
+"poems syndrome",
+"polyarteritis nodosa",
+"polymyositis",
+"psoriasis",
+"arthritis psoriatic",
+"reflex sympathetic dystrophy",
+"restless legs syndrome",
+"arthritis rheumatoid",
+"sarcoidosis",
+"stiff person syndrome",
+"takayasu arteritis",
+"colitis ulcerative",
+"uveitis",
+"vasculitis",
+
+
+## Other Mappings (from AARDA to GDA): 
+"anti-gbm/anti-tbm nephritis" -> "anti glomerular basement membrane disease"
+"behcets disease" -> "behcet syndrome",
+"benign mucosal pemphigoid" -> "pemphigoid benign mucous membrane"
+"type 1 diabetes" -> "diabetes mellitus type 1"
+"autoimmune urticaria" -> "urticaria"
+"lupus" -> "lupus erythematosus systemic"
+"meniere’s disease" -> "meniere disease"
+"mixed connective tissue disease"-> "connective tissue diseases"
+"congenital heart block" -> "atrioventricular block"
+"churg-strauss syndrome or eosinophilic granulomatosis" -> "churg strauss syndrome"
+"crohn's disease" -> "crohn disease"
+"fibrosing alveolitis" -> "idiopathic pulmonary fibrosis"
+"parsonage turner syndrome" -> "brachial plexus neuritis"
+"primary sclerosing cholangitis" -> "cholangitis sclerosing"
+"raynauds phenomenon" -> "raynaud disease"
+"hashimotos thyroiditis" -> "hashimoto disease"
+"hashimotos thyroiditis" -> "thyroiditis autoimmune"
+"herpes gestationis or pemphigoid gestationis" -> "pemphigoid gestationis"
+"immune thrombocytopenic purpura" -> "purpura thrombocytopenic idiopathic"
+"kawasaki disease" -> "mucocutaneous lymph node syndrome"
+"lichen sclerosus" -> "vulvar lichen sclerosus"
+"scleroderma" -> "scleroderma diffuse"
+"scleroderma" -> "scleroderma systemic"
+"scleroderma" -> "scleroderma limited"
+"scleroderma" -> "scleroderma localized"
+"sjögren’s syndrome" -> "sjogrens syndrome"
+"susacs syndrome" -> "susac syndrome"
+"thrombocytopenic purpura" -> "purpura thrombotic thrombocytopenic"
+"thyroid eye disease" -> "graves ophthalmopathy"
+"tolosa hunt syndrome" -> "ophthalmoplegia"
+"tolosa hunt syndrome" -> "ophthalmoplegia chronic progressive external"
+"undifferentiated connective tissue disease" -> "connective tissue diseases"
+
+```{r}
+final_auto_list <- c(read_tsv(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/autoimmune_disease_naming_scheme.txt", 
+                                col_names = F, col_types = cols())) %>% unlist()
+```
+
+
+# Make a file with all of the autoimmune diseases and genes
+```{r}
+# Change disease names to what I need them to be
+
+#GDA_auto = GDA_data
+GDA_data$OrigName = GDA_data$NewName
+
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "thyroiditis autoimmune", 
+                           replacement = "hashimoto disease", fixed = TRUE)
+
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma diffuse", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma systemic", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma limited", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma localized", 
+                           replacement = "scleroderma", fixed = TRUE)
+
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "ophthalmoplegia chronic progressive external", 
+                           replacement = "ophthalmoplegia", fixed = TRUE)
+
+GDA_data$NewName = unlist(GDA_data$NewName)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+####################  Old
+# Read in data and set up their objects
+```{r}
+# Gene-disease association data
+#GDA_data <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/Data_Clean_Complete.csv", sep = ",", header = T, stringsAsFactors = F)
+#GDA_data = GDA_data %>% filter(Strong > 0 | Weak > 0) %>% mutate(NewName = tolower(NewName)) %>% unique()
+
+GDA_data <- read.table("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_18122020_ClassFromDisGeNet.csv", sep = ",", header = T, stringsAsFactors = F)
+GDA_data = GDA_data %>% filter(Strong > 0 | Weak > 0) %>% mutate(DiseaseName = tolower(DiseaseName)) %>% unique()
+
+# Autoimmune Diseases
+autoimmune_diseases <- read_tsv(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/aarda_diseases_20210529.txt", 
+                                col_names = F, col_types = cols()) %>% as.matrix() %>% t() %>% as.data.frame()
+colnames(autoimmune_diseases)[1] <- "AutoDiseases"
+autoimmune_diseases %<>% mutate(AutoDiseases = tolower(AutoDiseases))
+
+
+# PPI
+ppi_df <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df <- ppi_df[,c("Symbol_A", "Symbol_B")]
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g = ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+
+# Get genes associated with these autoimmune diseases
+```{r}
+# Get list of diseases in GDA data
+# clean gene names
+
+doesItWork_auto = gsub(pattern = "-", replacement = " ", x = autoimmune_diseases$AutoDiseases , ignore.case = T)
+doesItWork_auto = gsub("[^0-9A-Za-z ]","" , doesItWork_auto,ignore.case = TRUE)
+auto_disease_unique = unique(doesItWork_auto)
+
+doesItWork_GDA = gsub(pattern = "-", replacement = " ", x = GDA_data$NewName, ignore.case = T)
+doesItWork_GDA = gsub("[^0-9A-Za-z ]","" , doesItWork_GDA, ignore.case = TRUE)
+GDA_disease_unique = unique(doesItWork_GDA)
+
+name_dist = stringdistmatrix(a = auto_disease_unique, b = GDA_disease_unique, method = "cosine")
+name_dist = name_dist %>% as.data.frame()
+rownames(name_dist) = auto_disease_unique
+colnames(name_dist) = GDA_disease_unique
+
+```
+
+```{r}
+# look at the disease name distances using just cosine
+
+potential_names_GDA = c()
+
+for(i in seq(1:dim(name_dist)[1])){
+  for(j in seq(1:dim(name_dist)[2])){
+    if(name_dist[i,j] <= 0.01){
+      #print(paste0("Row: ",  rownames(name_dist)[i], " Col: ",  colnames(name_dist)[j]))
+      potential_names_GDA = c(potential_names_GDA, colnames(name_dist)[j])
+    }
+  }
+}
+
+length(unique(potential_names_GDA))
+# cosine 0.01 : 47
+# cosine 0.02 : 53 -> no false pos
+# costine 0.03 : 56 -> 2 false pos
+
+# also tried qgram at 0.01 : 34
+# tanimoto 44
+```
+
+## Diseases that matched (GDA name): 
+"addison disease",
+"agammaglobulinemia",
+"alopecia areata",
+"amyloidosis",
+"antiphospholipid syndrome",
+"hepatitis autoimmune",
+"pemphigoid bullous",
+"castleman disease",
+"celiac disease",
+"chagas disease",
+"dermatomyositis",
+"endometriosis",
+"eosinophilic esophagitis",
+"giant cell arteritis",
+"glomerulonephritis",
+"granulomatosis with polyangiitis",
+"graves disease",
+"guillain barre syndrome",
+"anemia hemolytic",
+"purpura schoenlein henoch",
+"hidradenitis suppurativa",
+"myositis inclusion body",
+"cystitis interstitial",
+"arthritis juvenile",
+"multiple sclerosis",
+"myasthenia gravis",
+"myositis",
+"narcolepsy",
+"neuromyelitis optica",
+"neutropenia",
+"optic neuritis",
+"pemphigus",
+"poems syndrome",
+"polyarteritis nodosa",
+"polymyositis",
+"psoriasis",
+"arthritis psoriatic",
+"reflex sympathetic dystrophy",
+"restless legs syndrome",
+"arthritis rheumatoid",
+"sarcoidosis",
+"stiff person syndrome",
+"takayasu arteritis",
+"colitis ulcerative",
+"uveitis",
+"vasculitis",
+
+
+## Other Mappings (from AARDA to GDA): 
+"anti-gbm/anti-tbm nephritis" -> "anti glomerular basement membrane disease"
+"behcets disease" -> "behcet syndrome",
+"benign mucosal pemphigoid" -> "pemphigoid benign mucous membrane"
+"type 1 diabetes" -> "diabetes mellitus type 1"
+"autoimmune urticaria" -> "urticaria"
+"lupus" -> "lupus erythematosus systemic"
+"meniere’s disease" -> "meniere disease"
+"mixed connective tissue disease"-> "connective tissue diseases"
+"congenital heart block" -> "atrioventricular block"
+"churg-strauss syndrome or eosinophilic granulomatosis" -> "churg strauss syndrome"
+"crohn's disease" -> "crohn disease"
+"fibrosing alveolitis" -> "idiopathic pulmonary fibrosis"
+"parsonage turner syndrome" -> "brachial plexus neuritis"
+"primary sclerosing cholangitis" -> "cholangitis sclerosing"
+"raynauds phenomenon" -> "raynaud disease"
+"hashimotos thyroiditis" -> "hashimoto disease"
+"hashimotos thyroiditis" -> "thyroiditis autoimmune"
+"herpes gestationis or pemphigoid gestationis" -> "pemphigoid gestationis"
+"immune thrombocytopenic purpura" -> "purpura thrombocytopenic idiopathic"
+"kawasaki disease" -> "mucocutaneous lymph node syndrome"
+"lichen sclerosus" -> "vulvar lichen sclerosus"
+"scleroderma" -> "scleroderma diffuse"
+"scleroderma" -> "scleroderma systemic"
+"scleroderma" -> "scleroderma limited"
+"scleroderma" -> "scleroderma localized"
+"sjögren’s syndrome" -> "sjogrens syndrome"
+"susacs syndrome" -> "susac syndrome"
+"thrombocytopenic purpura" -> "purpura thrombotic thrombocytopenic"
+"thyroid eye disease" -> "graves ophthalmopathy"
+"tolosa hunt syndrome" -> "ophthalmoplegia"
+"tolosa hunt syndrome" -> "ophthalmoplegia chronic progressive external"
+"undifferentiated connective tissue disease" -> "connective tissue diseases"
+
+```{r}
+final_auto_list <- c(read_tsv(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/autoimmune_disease_naming_scheme.txt", 
+                                col_names = F, col_types = cols())) %>% unlist()
+```
+
+
+# Make a file with all of the autoimmune diseases and genes
+```{r}
+# Change disease names to what I need them to be
+
+#GDA_auto = GDA_data
+GDA_data$OrigName = GDA_data$NewName
+
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "thyroiditis autoimmune", 
+                           replacement = "hashimoto disease", fixed = TRUE)
+
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma diffuse", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma systemic", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma limited", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma localized", 
+                           replacement = "scleroderma", fixed = TRUE)
+
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "ophthalmoplegia chronic progressive external", 
+                           replacement = "ophthalmoplegia", fixed = TRUE)
+
+GDA_data$NewName = unlist(GDA_data$NewName)
+
+```
+
+```{r}
+GDA_auto = GDA_data[GDA_data$NewName %in% final_auto_list,] %>% unique()
+
+write.table(GDA_data, file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_data.csv", sep = ",", row.names = F, col.names = T)
+write.table(GDA_auto, file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto.csv", sep = ",", row.names = F, col.names = T)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

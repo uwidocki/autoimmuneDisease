@@ -1,0 +1,389 @@
+---
+title: "0.2_Adaptive_Compile_Data"
+author: "Ursula Widocki"
+date: "6/7/2021"
+output: html_document
+---
+
+#################################################################################################
+# Makes the Adaptive Immunity database and 
+# Looks at the Adaptive Immunity genes, examine each database
+#
+#     database overlap, database modules, adaptive immunity module
+#################################################################################################
+
+```{r setup, include=FALSE}
+rm(list = ls())
+```
+
+```{r}
+library(tidyverse)
+library(igraph)
+library(dplyr)
+require(magrittr)
+source("/Users/ursulawidocki/Desktop/BarabasiLab/NetMedTools.R")
+```
+
+```{r}
+go_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/godb_adaptive_genes.csv', header = T, sep = ",", row.names = 1)
+kegg_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/kegg_adaptive_genes.csv', header = T, sep = ",", row.names = 1)
+reactome_df <- read.table('/Users/ursulawidocki/Desktop/BarabasiLab/Data/reactome_adaptive_genes.csv', header = T, sep = ",", row.names = 1)
+```
+
+```{r}
+# Read in PPI data
+ppi <- read.csv('/Users/ursulawidocki/Desktop/BarabasiLab/Vaccine/Data/PPI_Symbol_Entrez.csv')
+ppi_df <- ppi[,c("Symbol_A", "Symbol_B")]
+
+#ppi_df = ppi_df %>% filter(Symbol_A != "" | Symbol_B != "")
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_B) & ppi_df$Symbol_B ==""), ]
+ppi_df = ppi_df[!(!is.na(ppi_df$Symbol_A) & ppi_df$Symbol_A ==""), ]
+
+ppi_df$value = 1
+ppi_df = ppi_df %>% unique()
+ppi_g <- igraph::graph_from_data_frame(ppi_df, directed = F)
+ppi_g %<>% simplify()
+
+ppi_degree_df = data.frame(Degree = degree(graph = ppi_g)) %>%
+  mutate(Gene = row.names(.))
+
+```
+
+```{r}
+# make database titled column unique for each db
+names(go_df)[4] <- "GO"
+names(kegg_df)[4] <- "KEGG"
+names(reactome_df)[5] <- "ReactomeDB"
+```
+
+```{r}
+# remove columns from dfs we don't need
+
+go_df %<>% dplyr::select(-EntrezID)
+kegg_df %<>% dplyr::select(-EntrezID)
+reactome_df %<>% dplyr::select(-EntrezID, -PathwayNames)
+```
+
+```{r}
+# make pathway annotation columns have names in uniform format
+
+names(go_df)[2] <- "GOpathID"
+names(reactome_df)[2] <- "ReactomDBpathID"
+```
+
+```{r}
+## bring the four dataframes together into one
+
+full_df <- plyr::join_all(list(go_df, kegg_df, reactome_df), type = "full")
+
+# makes sure only unique entries stay
+gene_in_each <- full_df %>% unique() # makes sure only unique entries stay
+
+```
+
+```{r}
+write.table(gene_in_each, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/adaptive_genes_all.tsv", sep = "\t", row.names = T, col.names = T)
+```
+
+```{r}
+library(eulerr)
+
+# Make a venn diagram to look at the overlap
+go <- go_df$Symbol %>% unique()
+kegg <- kegg_df$Symbol %>% unique()
+reactome <- reactome_df$Symbol %>% unique()
+
+fit <- euler(list(GO = go, KEGG = kegg, ReactomeDB = reactome))
+
+# Customize colors, remove borders, bump alpha, color labels white
+plot(fit,
+     fills = list(fill = c("red", "steelblue4", "turquoise3"), alpha = 0.4),
+     labels = list(col = "white", font = 4), quantities = T)
+
+```
+
+
+
+
+# Do each db make an LCC?
+
+```{r}
+## GO LCC with all genes
+
+#go_df <- subset(all_genes_df, all_genes_df$GO == "GO.DB")
+# get GO genes that are the PPI
+genes_go <- go_df[!duplicated(go_df$Symbol), "Symbol"] # has UBC
+genes_go = genes_go[genes_go %in% V(ppi_g)$name]
+
+LCC_go = LCC_signif(G = ppi_g, targets = genes_go, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_go$size, LCC_go$distribution)
+hist(LCC_go$distribution, main = "GO LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_go$size, col = "red")
+
+```
+
+```{r}
+## Distribution of degrees of genes removes from above (isolated nodes)
+
+go_graph <- induced_subgraph(ppi_g, genes_go)
+# get genes that are just in the LCC and remove genes that are isolated
+temp <- components(go_graph)$membership
+inLCC_go = names(temp[temp == 1])
+nonLCC_go = names(temp[temp != 1])
+
+nonLCC_go = names(temp[temp != 1])
+not_go_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_go)
+
+not_LCC_go_df <- not_go_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_go_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in LCC (GO)") +
+  theme_minimal()
+
+## Degree distribution of genes in the LCC
+
+LCC_go_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_go) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_go_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in LCC (GO)") +
+  theme_minimal()
+```
+
+
+
+
+
+
+
+```{r}
+## KEGG LCC with all genes
+
+#kegg_df <- subset(all_genes_df, all_genes_df$KEGG == "KEGG.db")
+# get KEGG genes that are the PPI
+genes_kegg <- kegg_df[!duplicated(kegg_df$Symbol), "Symbol"]
+genes_kegg = genes_kegg[genes_kegg %in% V(ppi_g)$name]
+
+LCC_kegg = LCC_signif(G = ppi_g, targets = genes_kegg, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+## Plotting
+lim = c(LCC_kegg$size, LCC_kegg$distribution)
+hist(LCC_kegg$distribution, main = "KEGG LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_kegg$size, col = "red")
+```
+
+```{r}
+## Distribution of degrees of genes removes from above (isolated nodes)
+kegg_graph <- induced_subgraph(ppi_g, genes_kegg)
+temp <- components(kegg_graph)$membership
+nonLCC_kegg = names(temp[temp != 1])
+inLCC_kegg = names(temp[temp == 1])
+
+not_kegg_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_kegg)
+
+not_LCC_df <- not_kegg_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in LCC (KEGG)") +
+  theme_minimal()
+
+## Degree distribution of genes in the LCC
+
+LCC_kegg_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_kegg) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# Plot degrees of nodes in PPI
+ggplot(LCC_kegg_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in LCC (KEGG)") +
+  theme_minimal()
+```
+
+
+
+
+
+
+
+
+```{r}
+## ReactomeDB LCC with all genes
+
+#reactome_df <- subset(all_genes_df, all_genes_df$ReactomeDB == "ReactomeDB")
+# Get ReactomeDB genes that are the PPI
+genes_reactome <- reactome_df[!duplicated(reactome_df$Symbol), "Symbol"] # has UBC
+genes_reactome = genes_reactome[genes_reactome %in% V(ppi_g)$name]
+
+LCC_reactome = LCC_signif(G = ppi_g, targets = genes_reactome, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+# Plotting
+lim = c(LCC_reactome$size, LCC_reactome$distribution)
+hist(LCC_reactome$distribution, main = "ReactomeDB LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_reactome$size, col = "red")
+```
+
+```{r}
+## Distribution of degrees of genes removes from above (isolated nodes)
+reactome_graph <- induced_subgraph(ppi_g, genes_reactome)
+temp <- components(reactome_graph)$membership
+nonLCC_reactome = names(temp[temp != 1])
+inLCC_reactome = names(temp[temp == 1])
+
+not_reactome_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_reactome)
+
+not_LCC_df <- not_reactome_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in LCC (ReactomeDB)") +
+  theme_minimal()
+
+# degree distribution of genes in the LCC
+
+LCC_reactome_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_reactome) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# plot degrees of nodes in PPI
+ggplot(LCC_reactome_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in LCC (ReactomeDB)") +
+  theme_minimal()
+```
+
+############# Now let's plot some of these distributions together
+
+Now, let's plot the database distributions together
+```{r}
+plot_go <- hist(LCC_go$distribution)    
+plot_kegg <- hist(LCC_kegg$distribution)
+plot_reactome <- hist(LCC_reactome$distribution)
+
+plot( plot_go, col=rgb(0,1,0,1/2), border = F, xlim = c(150,1100), ylim = c(0, 300), main = "Histogram of Innate Immunity Database LCC Distributions")  # first histogram
+plot( plot_kegg, col=scales::alpha('skyblue',.5),  add=T, border = F)
+plot( plot_reactome, col=rgb(0,0,1,1/4),  add=T, border = F)
+legend("topright", c("GO","KEGG", "ReactomeDB"), col=c(rgb(0,1,0,1/2), "skyblue", rgb(0,0,1,1/4)), lwd=10)
+```
+
+# Separation of these LCCs
+
+```{r}
+# Bind the gene and labels together
+go_temp = go_df[,c("Symbol", "Database")] %>% na.omit()
+colnames(go_temp)[2] = "Label"
+kegg_temp = kegg_df[,c("Symbol", "Database")] %>% na.omit()
+colnames(kegg_temp)[2] = "Label"
+reactome_temp = reactome_df[,c("Symbol", "Database")] %>% na.omit()
+colnames(reactome_temp)[2] = "Label"
+
+
+sep_labels = rbind(go_temp, kegg_temp) %>% rbind(., reactome_temp)
+
+# Calc. Sep.
+all_sep = module_sep(ppi_g, sep_labels)
+
+sab_all = all_sep$Sab
+sab_all[is.na(sab_all)] <- 0 # make NA 0
+sab_all = sab_all + t(sab_all)
+
+superheat(sab_all, pretty.order.rows = T, pretty.order.cols = T, bottom.label.text.angle = 90, heat.pal = c("white", "red"), left.label.text.size = 2, bottom.label.text.size = 3 )
+# heat.pal.values = c(0, 0.22, 1)
+```
+
+
+```{r}
+genes_all <- gene_in_each[!duplicated(gene_in_each$Symbol), "Symbol"]
+genes_all = genes_all[genes_all %in% V(ppi_g)$name]
+
+LCC_all_adapt = LCC_signif(G = ppi_g, targets = genes_all, num_bins_degree_G = 50, min_bin_degree = 20, iter = 1000)
+
+# Plotting
+lim = c(LCC_all_adapt$size, LCC_all_adapt$distribution)
+hist(LCC_all_adapt$distribution, main = "All Adaptive Databases LCC Empirical Distribution", xlim = c(min(lim - 50), max(lim + 50)), ylim = c(0, 300), col = 'gray75', ylab = "", breaks = 20)
+
+abline(v = LCC_all_innate$size, col = "red")
+```
+
+```{r}
+## Distribution of degrees of genes removes from above (isolated nodes)
+all_adapt_graph <- induced_subgraph(ppi_g, genes_all)
+temp <- components(all_adapt_graph)$membership
+nonLCC_all_adapt = names(temp[temp != 1])
+inLCC_all_adapt = names(temp[temp == 1])
+
+not_all_adapt_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% nonLCC_all_adapt)
+
+not_LCC_df <- not_all_adapt_df %>%
+  group_by(Degree) %>%
+  summarise(n = n())
+
+# Plot degree frequency
+ggplot(not_LCC_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#1f9e89") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes Not in LCC") +
+  theme_minimal()
+
+# degree distribution of genes in the LCC
+
+LCC_all_adapt_df <- subset(ppi_degree_df, rownames(ppi_degree_df) %in% inLCC_all_adapt) %>%
+  group_by(Degree) %>%
+  summarize(n = n())
+
+# plot degrees of nodes in PPI
+ggplot(LCC_all_adapt_df) +
+  aes(x = Degree, y = n) +
+  geom_point(size = 1L, colour = "#bd3786") +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10") +
+  labs(x = "Degree", y = "Freq.", title = "Degrees of Nodes in LCC") +
+  theme_minimal()
+```
+
+
+
+
+
+
+
+
