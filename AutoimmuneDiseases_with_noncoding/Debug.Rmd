@@ -1,0 +1,81 @@
+---
+title: "debugging"
+author: "Ursula Widocki"
+date: "2022-12-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+
+# gene categories
+gene_categories <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/hgnc_category_set_2022-04-04.txt") %>% 
+  as.data.frame() %>%
+  rename(`Gene name` = HGNC_Symbol)
+
+# gene alias data
+alias <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/multiple_hgnc_dict_set_2022-04-04.txt") %>%
+  as.data.frame() %>%
+  filter(HGNC_Symbol != alias)
+
+# immune cell data
+immune_cell_df <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/HPA_rna_blood_cell.tsv") %>% as.data.frame() %>%
+  dplyr::select(-Gene) %>% 
+  dplyr::select(`Gene name`, `Blood cell`, nTPM) %>%
+  filter(nTPM > 0) %>%
+  left_join(., gene_categories)
+
+# get genes with HGNC_category_short as NA
+immune_cell_genes_na <- immune_cell_df %>%
+  filter(is.na(HGNC_category_short)) # get NA rows
+
+# remove NAs from original data
+immune_cell_df %<>% filter(!is.na(HGNC_category_short)) # get rid of NAs
+
+# get HGNC Symbol of aliases
+immune_alias <- alias %>%
+  filter(alias %in% immune_cell_genes_na$`Gene name`) %>%
+  rename(`Gene name` = alias)
+
+# add HGNC_Symbol names to NA genes
+immune_cell_genes_na <- left_join(immune_cell_genes_na, immune_alias) %>%
+  select(-`Gene name`) %>% # drop "bad" gene names
+  rename(`Gene name` = HGNC_Symbol) %>% # rename gene column
+  select(`Gene name`, nTPM, `Blood cell`) %>%
+  left_join(., gene_categories) %>%
+  na.omit()
+
+immune_cell_df <- rbind(immune_cell_df, immune_cell_genes_na)
+immune_cell_df <- na.omit(immune_cell_df)
+
+summary_immune_cell = immune_cell_df %>% 
+  group_by(`Blood cell`, `Gene name`, HGNC_category_short) %>% # it's not grouping by gene name
+  summarise(sum = sum(nTPM)) %>% 
+  ungroup() %>%
+  group_by(`Blood cell`, HGNC_category_short) %>%
+  mutate(Q10 = quantile(sum, 0.1))
+         #Q25 = quantile(sum, 0.25),
+         #Q50 = quantile(sum, 0.50), 
+         #Q75 = quantile(sum, 0.75), 
+         #Q90 = quantile(sum, 0.90))
+```
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,220 @@
+---
+title: "0.0.1_newData_Adds_Autoimmune_dis_to_GDA"
+author: "Ursula Widocki"
+date: "4/3/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(magrittr)
+library(igraph)
+`%ni%` <- Negate(`%in%`)
+```
+
+```{r}
+GDA_data = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_Complete_04042022.csv")
+
+final_auto_list <- c(read_tsv(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/autoimmune_disease_naming_scheme.txt", 
+                                col_names = F, col_types = cols())) %>% unlist()
+```
+
+```{r}
+# Use this chunk to look at which diseases are present in the dataset
+GDA_data %>% 
+  filter(NewName == final_auto_list[72]) # chronic urticaria is not present, change name of scleroderma
+```
+
+```{r}
+# Combine names
+
+# combine types of scleroderma
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma diffuse", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma systemic", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "scleroderma limited", 
+                           replacement = "scleroderma", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "crest syndrome", 
+                           replacement = "scleroderma", fixed = TRUE) # newly added
+
+# combines types of ophthalmoplegia
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "ophthalmoplegia chronic progressive external", 
+                           replacement = "ophthalmoplegia", fixed = TRUE)
+
+# autoimmune thyroiditis is also Hashimoto disease
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "thyroiditis autoimmune", 
+                           replacement = "hashimoto disease", fixed = TRUE)
+
+
+
+```
+
+```{r}
+# ADDITIONAL names to combine
+
+# combine all diseases starting with "purpura" into "purpura"
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "purpura thrombocytopenic idiopathic", 
+                           replacement = "purpura", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "purpura schoenlein henoch", 
+                           replacement = "purpura", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "purpura fulminans", 
+                           replacement = "purpura", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "purpura thrombocytopenic", 
+                           replacement = "purpura", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "purpura thrombocytopenic idiopathic", 
+                           replacement = "purpura", fixed = TRUE)
+
+# combine all "myositis" diseases (myo-, poly-, dermato-) into "polymyositis
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "dermatomyositis", 
+                           replacement = "polymyositis", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "myositis", 
+                           replacement = "polymyositis", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "myositis inclusion body", 
+                           replacement = "polymyositis", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "myositis ossificans", 
+                           replacement = "polymyositis", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "myositis ossificans", 
+                           replacement = "polymyositis", fixed = TRUE)
+
+# combine all diseases starting with "graves" into "graves disease"
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "graves ophthalmopathy", 
+                           replacement = "graves disease", fixed = TRUE)
+
+# combine myasthenia gravis with Lambert-Eaton
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "lambert eaton myasthenic syndrome", 
+                           replacement = "myasthenia gravis", fixed = TRUE)
+
+# combine anemia hemolytic with its many other diseases and names
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "anemia hemolytic autoimmune", 
+                           replacement = "anemia hemolytic", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "anemia hemolytic congenital", 
+                           replacement = "anemia hemolytic", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "favism", 
+                           replacement = "anemia hemolytic", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "hemolytic uremic syndrome", 
+                           replacement = "anemia hemolytic", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "hemoglobinuria paroxysmal", 
+                           replacement = "anemia hemolytic", fixed = TRUE)
+# combine alopecia with areata
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "alopecia", 
+                           replacement = "alopecia areata", fixed = TRUE)
+
+# combine RA with its subtypes
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "sjogrens syndrome", 
+                           replacement = "arthritis rheumatoid", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "caplan syndrome", 
+                           replacement = "arthritis rheumatoid", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "rheumatoid nodule", 
+                           replacement = "arthritis rheumatoid", fixed = TRUE)
+
+# combine name sof uveitis
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "uveomeningoencephalitic syndrome", 
+                           replacement = "uveitis", fixed = TRUE)
+
+# combine types of sarcoidosis
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "sarcoidosis pulmonary", 
+                           replacement = "sarcoidosis", fixed = TRUE)
+
+# combine types of chagas
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "chagas cardiomyopathy", 
+                           replacement = "chagas disease", fixed = TRUE)
+
+# combine glomerulonephritis diseases
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "glomerulonephritis iga", 
+                           replacement = "glomerulonephritis", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "anti glomerular basement membrane disease", 
+                           replacement = "glomerulonephritis", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "glomerulonephritis membranoproliferative", 
+                           replacement = "glomerulonephritis", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "glomerulonephritis membranous", 
+                           replacement = "glomerulonephritis", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "glomerulosclerosis focal segmental", 
+                           replacement = "glomerulonephritis", fixed = TRUE)
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "lupus nephritis", 
+                           replacement = "glomerulonephritis", fixed = TRUE)
+
+# combine type 1 diabetes with Wolfram Syndrome
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "wolfram syndrome", 
+                           replacement = "diabetes mellitus type 1", fixed = TRUE)
+
+# combine psoriasis with psoriatic arthritis
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "arthritis psoriatic", 
+                           replacement = "psoriasis", fixed = TRUE)
+
+# combine types of MS and relapsing remitting
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "multiple sclerosis relapsing remitting", 
+                           replacement = "multiple sclerosis", fixed = TRUE)
+
+# combine lupus erythmatosus with lupus vasculitis
+GDA_data$NewName <- lapply(GDA_data$NewName, gsub, pattern = "lupus vasculitis central nervous system", 
+                           replacement = "lupus erythematosus systemic", fixed = TRUE)
+
+GDA_data$NewName = unlist(GDA_data$NewName)
+GDA_data %<>% filter(NewName != "antiphospholipid syndrome") %>% # remove "antiphospholipid syndrome"
+  filter(NewName != "reflex sympathetic dystrophy") %>% # remove "reflex sympathetic dystrophy"
+  filter(NewName != "connective tissue diseases") # remove connective tissue diseases
+```
+
+
+```{r}
+# Adds columns marking if autoimmune
+dis_all = unique(GDA_data$NewName)
+
+sum(final_auto_list %in% dis_all)
+
+GDA_data$isAutoimmune = ifelse(GDA_data$NewName %in% final_auto_list, 1, 0)
+```
+
+```{r}
+write.table(GDA_data, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/GDA_auto_new2.tsv", sep = "\t", row.names = T, col.names = T)
+```
+
+```{r}
+# Look at the number of genes per disease
+disease_gene_assoc = GDA_data %>%
+  filter(NewName %in% final_auto_list) %>%
+  filter(Strong > 0 | 
+           Weak > 0) %>%
+  #filter(hgnc_symbol %in% V(ppi_g)$name)%>% 
+  group_by(NewName) %>%
+  mutate(Total_Genes = n()) %>%
+  filter(Total_Genes > 5) %>%
+  filter(isAutoimmune == 1) %>%
+  dplyr::select(NewName, HGNC_Symbol) %>%
+  unique() %>%
+  group_by(NewName) %>%
+  summarize(n = n())
+rownames(disease_gene_assoc) = disease_gene_assoc$NewName
+
+# Examine number of disease genes per autoimmune disease
+disease_gene_assoc %<>%
+  arrange((n))
+disease_gene_assoc$NewName = factor(row.names(disease_gene_assoc), levels = row.names(disease_gene_assoc))
+ggplot(disease_gene_assoc) +
+  aes(x = NewName, y = n) +
+  geom_point(shape = "circle", fill = "tomato1", color = "tomato1", alpha = 0.4) +
+  labs(title = "Number of Disease Genes per Autoimmune Disease", x = "Autoimmune Disease", y = "Number of Disease Genes") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

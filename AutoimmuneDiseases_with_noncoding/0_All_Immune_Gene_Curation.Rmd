@@ -1,0 +1,600 @@
+---
+title: "0_All_Immune Gene_Curation"
+author: "Ursula Widocki"
+date: "7/6/2021"
+output: html_document
+---
+
+#########################################################################################
+# 
+# This file gets all of the genes from GO, KEGG, InnateDB, and ReactomeDB associated with 
+# the immune system and distinguishes between what each db defines as the innate
+# immune system, adaptive immune system, and other components of immunity
+# 
+# Makes one database-like file of gene, immune pathway, and db information
+#
+#########################################################################################
+
+```{r setup, include=FALSE}
+rm(list=ls())
+```
+
+```{r}
+# Packages and Libraries
+library(tidyverse)
+library(dplyr)
+library(data.table)
+library(igraph)
+`%ni%` <- Negate(`%in%`)
+
+# where the Entrez to gene symbol conversion is coming from
+gene_human <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/gene_human.csv")
+gene_human <- gene_human[,2:3]
+```
+
+```{r}
+# Read in PPI
+ncppi <- fread('/Users/ursulawidocki/Desktop/BarabasiLab/Data/ncPPI_PPI_2022_04042022.csv')
+ncppi_df <- ncppi[,c("HGNC_Symbol.1", "HGNC_Symbol.2")]
+
+ncppi_df = ncppi_df[!(!is.na(ncppi_df$HGNC_Symbol.2) & ncppi_df$HGNC_Symbol.2 ==""), ]
+ncppi_df = ncppi_df[!(!is.na(ncppi_df$HGNC_Symbol.1) & ncppi_df$HGNC_Symbol.1 ==""), ]
+
+ncppi_df$value = 1
+ncppi_df = ncppi_df %>% unique()
+ncppi_g <- igraph::graph_from_data_frame(ncppi_df, directed = F)
+ncppi_g <- simplify(ncppi_g)
+
+ncppi_degree_df = data.frame(Degree = igraph::degree(graph = ncppi_g)) %>%
+  mutate(Gene = row.names(.))
+```
+
+
+### GO
+```{r}
+# for GO
+library(GO.db)
+# where the GO data is coming from
+gene2go <- fread(file = "/Users/ursulawidocki/Desktop/BarabasiLab/Data/gene2go")
+evid = c("EXP", "IDA", "IPI", "IMP", "IGI", "IEP", "HTP", "HDA", "HMP", "HGI", "HEP", "IBA", "IBD", "IKR", "IRD")
+#bad_evid = c("NAS", "ND", "IEA", "ISS", "IC") # http://geneontology.org/docs/guide-go-evidence-codes/
+gene2go = gene2go %>%
+  filter(`#tax_id` == 9606) %>%
+  filter(Evidence %in% evid)
+  #filter(Evidence %ni% bad_evid)
+```
+
+### GO
+# Gets all innate immune response genes
+```{r}
+go_id = GOID( GOTERM[ Term(GOTERM) == "innate immune response"]) # all GO IDs for innate immune 
+
+# OFFSPRING consists of children of GO terms and all of their offspring
+innate_offspring <- as.list(GOBPOFFSPRING)
+innate_offspring <- innate_offspring[!is.na(innate_offspring)]
+
+innate_offspring = c(go_id, innate_offspring$`GO:0045087`) # all child paths of innate immune response
+
+# Get genes in paths based on gene2go
+go_innate_df = gene2go %>% 
+  filter(GO_ID %in% innate_offspring)
+
+# use the human gene symbol file to convert from Entrez to symbol
+go_innate_df = merge(go_innate_df, gene_human)
+
+go_innate_df = go_innate_df[,c("Symbol", "GO_ID", "GO_term")] # pick cols we want
+colnames(go_innate_df) = c("Symbol", "GOPathIDInnate", "GOPathwayInnate") # rename cols
+go_innate_df$GO <- 1
+go_innate_df$isInnateGO <- 1
+
+```
+
+# Gets all adaptive immune response genes
+```{r}
+go_id = GOID( GOTERM[ Term(GOTERM) == "adaptive immune response"]) # all GO IDs for innate immune 
+
+# OFFSPRING consists of children of GO terms and all of their
+adapt_offspring <- as.list(GOBPOFFSPRING)
+adapt_offspring <- adapt_offspring[!is.na(adapt_offspring)]
+
+adapt_offspring = c(go_id, adapt_offspring$`GO:0002250`) # all child paths of innate immune response
+
+# Get genes in paths based on gene2go
+
+go_adapt_df = gene2go %>% 
+  filter(GO_ID %in% adapt_offspring)
+
+# use the human gene symbol file to convert from Entrez to symbol
+go_adapt_df = merge(go_adapt_df, gene_human)
+
+go_adapt_df = go_adapt_df[,c("Symbol", "GO_ID", "GO_term")] # pick cols we want
+colnames(go_adapt_df) = c("Symbol", "GOPathIDAdaptive", "GOPathwayAdaptive") # rename cols
+go_adapt_df$GO <- 1
+go_adapt_df$isAdaptiveGO <- 1
+
+```
+
+# Gets all GO immune response genes in paths not in innate or adaptive
+```{r}
+# get all paths under immune root
+
+go_id = GOID( GOTERM[ Term(GOTERM) == "immune response"])
+
+# OFFSPRING consists of children of GO terms and all of their
+offspring <- as.list(GOBPOFFSPRING)
+offspring <- offspring[!is.na(offspring)]
+
+offspring = c(go_id, offspring$`GO:0006955`) # all child paths of innate immune response
+offspring = offspring[offspring %ni% innate_offspring]
+offspring = offspring[offspring %ni% adapt_offspring]
+
+# Get genes in paths based on gene2go
+
+go_other_df = gene2go %>% 
+  filter(GO_ID %in% offspring)
+
+# use the human gene symbol file to convert from Entrez to symbol
+go_other_df = merge(go_other_df, gene_human)
+
+go_other_df = go_other_df[,c("Symbol", "GO_ID", "GO_term")] # pick cols we want
+colnames(go_other_df) = c("Symbol", "GOPathIDOther", "GOPathwayOther") # rename cols
+go_other_df$GO <- 1
+go_other_df$isOtherGO <- 1
+
+```
+
+
+
+
+
+
+### KEGG
+```{r}
+# for KEGG
+library(KEGGREST)
+database = "pathway"
+```
+
+# Gets innate immunity genes
+```{r}
+innate_KEGG_paths <- c("hsa04062", "hsa04610",
+                       "hsa04611", "hsa04612", 
+                       "hsa04613", "hsa04620", 
+                       "hsa04621", "hsa04622", 
+                       "hsa04623", "hsa04625", 
+                       "hsa04640", "hsa04650", 
+                       "hsa04657", "hsa04664", 
+                       "hsa04670", "hsa04672")
+
+# keggGet can only get 10 inputs due to server limitations
+query1 <- keggGet(innate_KEGG_paths[1:10])
+
+query2 <-keggGet(innate_KEGG_paths[11:length(innate_KEGG_paths)])
+
+col_labels <- c("Symbol", "KEGG", "KEGGPathIDInnate", "KEGGPathwayInnate")
+kegg_innate_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(kegg_innate_df) <- col_labels
+
+for(p in 1:length(query1)){ # for each path in the query
+  pathname = query1[[p]]$NAME # get path name
+  pathID = query1[[p]]$ENTRY # get path id
+  
+  pathgenes = query1[[p]]$GENE # gets list of genes in query p
+  
+  # to extract EntrezID
+  gene = pathgenes[seq(1,length(pathgenes), 2)]
+  
+  for(g in gene){ # for each gene, add line of its pathway and info
+    symb_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+    new_line <- c(symb_gene, "1", pathID, pathname)
+    kegg_innate_df[nrow(kegg_innate_df)+1,] <- new_line
+  }
+}
+
+for(p in 1:length(query2)){
+  pathname = query2[[p]]$NAME # get path name
+  pathID = query2[[p]]$ENTRY # get path id
+  
+  pathgenes = query2[[p]]$GENE # gets list of genes in query p
+  
+  # to extract EntrezID
+  gene = pathgenes[seq(1,length(pathgenes), 2)]
+  
+  for(g in gene){ # for each gene, add line of its pathway and info
+    symb_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+    new_line <- c(symb_gene, 1, pathID, pathname)
+    kegg_innate_df[nrow(kegg_innate_df)+1,] <- new_line
+    
+  }
+}
+
+kegg_innate_df$isInnateKEGG <- 1
+
+```
+
+# Get adaptive immunity genes
+```{r}
+adapt_KEGG_paths <- c("hsa04062", "hsa04610", 
+                      "hsa04612", "hsa04640", 
+                      "hsa04657", "hsa04658", 
+                      "hsa04659", "hsa04660", 
+                      "hsa04662", "hsa04664", 
+                      "hsa04666", "hsa04670", 
+                      "hsa04672")
+
+# keggGet can only get 10 inputs due to server limitations
+query1 <- keggGet(adapt_KEGG_paths[1:10])
+
+query2 <-keggGet(adapt_KEGG_paths[11:length(adapt_KEGG_paths)])
+
+col_labels <- c("Symbol", "KEGG", "KEGGPathIDAdaptive", "KEGGPathwayAdaptive")
+kegg_adapt_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(kegg_adapt_df) <- col_labels
+
+for(p in 1:length(query1)){
+  pathname = query1[[p]]$NAME # get path name
+  pathID = query1[[p]]$ENTRY # get path id
+  
+  pathgenes = query1[[p]]$GENE # gets list of genes in query p
+  
+  # to extract EntrezID
+  gene = pathgenes[seq(1,length(pathgenes), 2)]
+  
+  for(g in gene){ # for each gene, add line of its pathway and info
+    symb_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+    new_line <- c(symb_gene, "1", pathID, pathname)
+    kegg_adapt_df[nrow(kegg_adapt_df)+1,] <- new_line
+  }
+}
+
+for(p in 1:length(query2)){
+  pathname = query2[[p]]$NAME # get path name
+  pathID = query2[[p]]$ENTRY # get path id
+  
+  pathgenes = query2[[p]]$GENE # gets list of genes in query p
+  
+  # to extract EntrezID
+  gene = pathgenes[seq(1,length(pathgenes), 2)]
+  
+  for(g in gene){ # for each gene, add line of its pathway and info
+    symb_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+    new_line <- c(symb_gene, 1, pathID, pathname)
+    kegg_adapt_df[nrow(kegg_adapt_df)+1,] <- new_line
+  }
+}
+
+kegg_adapt_df$isAdaptiveKEGG <- 1
+
+```
+
+
+
+### InnateDB
+The website can be found here: https://www.innatedb.com
+
+The page where we downloaded the data can be found here: https://www.innatedb.com/annotatedGenes.do?type=innatedb 
+
+```{r}
+# for InnateDB
+library(readxl)
+# From https://www.innatedb.com/annotatedGenes.do?type=innatedb
+man_file <- "/Users/ursulawidocki/Desktop/BarabasiLab/Data/innatedb_curated_genes_innate_immunity.xls"
+innatedb_df <- read_xls(man_file)
+
+# alias conversion is necessary if gene symbol is not found in gene_human["Symbol"]
+#alias_dict = fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/GeneSymbolToAliasANDPreviousNames.txt", 
+#                        sep = "\t", stringsAsFactors = F, header = T) 
+
+
+symbol_dict <- fread("/Users/ursulawidocki/Desktop/BarabasiLab/Data/multiple_hgnc_dict_set_2022-04-04.txt")
+```
+
+```{r}
+innatedb_df = innatedb_df %>%
+  filter(Species == "9606")
+innatedb_df <- innatedb_df[,c("Gene Symbol", "Annotation")]
+innatedb_df$upper <- toupper(innatedb_df$`Gene Symbol`) # potential protein symbols converted to gene symbols
+innatedb_df$InnateDB <- 1
+```
+
+```{r}
+# get indices of upper not in Symbol and get corresponding Gene Symbol
+odd_gene_ind <- which(innatedb_df$upper %ni% symbol_dict$HGNC_Symbol)
+odd_gene <- innatedb_df$`Gene Symbol`[odd_gene_ind]
+
+good_genes_df <- innatedb_df %>%
+  filter(upper %in% symbol_dict$HGNC_Symbol) %>%
+  dplyr::select(-`Gene Symbol`)
+colnames(good_genes_df)[2] <- "Symbol"
+
+bad_genes_df <- innatedb_df[odd_gene_ind,] %>% dplyr::select(-upper)
+colnames(bad_genes_df)[1] <- "alias"
+# get gene symbols of bad genes that are aliases
+bad_genes_df <- left_join(bad_genes_df, symbol_dict)
+bad_genes_df <- bad_genes_df %>% 
+  dplyr::select(-alias) %>%
+  drop_na(HGNC_Symbol)
+colnames(bad_genes_df)[3] <- "Symbol"
+bad_genes_df <- bad_genes_df[,c("Annotation", "Symbol", "InnateDB")]
+
+# merge with good_genes_df
+innatedb_df <- rbind(good_genes_df, bad_genes_df)
+innatedb_df$isInnateInnateDB <- 1
+colnames(innatedb_df)[1] <- "InnateDBPathway"
+
+```
+
+
+
+### ReactomeDB
+
+```{r}
+library(reactome.db)
+reactomeIDs <- reactomePATHNAME2ID # maps Reactome path identifiers to reactomeIDs
+entrezGenes <- reactomePATHID2EXTID # maps reactome IDs to Entrez gene names
+entrez_to_ID <- reactomeEXTID2PATHID
+path_ID_to_name <- reactomePATHID2NAME
+go_to_reactome <- reactomeGO2REACTOMEID
+```
+
+```{r}
+# use GO innate: GO:0045087
+
+xx <- c(unique(as.list(reactomeGO2REACTOMEID$`GO:0045087`)))
+#reactome_innate_path <- c(as.list(reactomePATHID2NAME$`R-HSA-168249`)) # pathway name
+ID <- xx[[1]]
+reactome_innate_genes <- entrezGenes[[ID]]
+
+# set up df to store genes and paths
+col_labels <- c("Symbol", "ReactomePathwayInnate", "ReactomePathIDInnate", "ReactomeDB")
+reactome_innate_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(reactome_innate_df) <- col_labels
+
+for(g in reactome_innate_genes){
+    if(g %in% gene_human$GeneID){
+      sym_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+      name_path <- path_ID_to_name[[ID]]
+      new_line <- c(sym_gene, name_path, ID, 1)
+      reactome_innate_df[nrow(reactome_innate_df) + 1,] <- new_line
+      
+    }
+}
+
+reactome_innate_df$isInnateReactome <- 1
+
+```
+
+```{r}
+# use GO adaptive: GO:0002250
+
+xx <- c(unique(as.list(reactomeGO2REACTOMEID$`GO:0002250`)))
+ID <- xx[[1]]
+reactome_adaptive_genes <- entrezGenes[[ID]]
+
+# set up df to store genes and paths
+col_labels <- c("Symbol", "ReactomePathwayAdaptive", "ReactomePathIDAdaptive", "ReactomeDB")
+reactome_adapt_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(reactome_adapt_df) <- col_labels
+
+for(g in reactome_adaptive_genes){
+    if(g %in% gene_human$GeneID){
+      sym_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+      name_path <- path_ID_to_name[[ID]]
+      new_line <- c(sym_gene, name_path, ID, 1)
+      reactome_adapt_df[nrow(reactome_adapt_df) + 1,] <- new_line
+      
+    }
+}
+
+reactome_adapt_df$isAdaptiveReactome = 1
+```
+
+
+
+
+### Bring together all databases
+
+```{r}
+full_join_g = plyr::join_all(list(go_innate_df, go_adapt_df, go_other_df), type = "full")
+full_join_k = plyr::join_all(list(kegg_innate_df, kegg_adapt_df), type = "full")
+full_join_r = plyr::join_all(list(reactome_innate_df, reactome_adapt_df), type = "full")
+full_join = plyr::join_all(list(full_join_g, full_join_k, full_join_r, innatedb_df), type = "full")
+
+full_join$isInnateGO[is.na(full_join$isInnateGO)] = 0
+full_join$isInnateKEGG[is.na(full_join$isInnateKEGG)] = 0
+full_join$isInnateInnateDB[is.na(full_join$isInnateInnateDB)] = 0
+full_join$isInnateReactome[is.na(full_join$isInnateReactome)] = 0
+
+full_join$isAdaptiveGO[is.na(full_join$isAdaptiveGO)] = 0
+full_join$isAdaptiveKEGG[is.na(full_join$isAdaptiveKEGG)] = 0
+full_join$isAdaptiveReactome[is.na(full_join$isAdaptiveReactome)] = 0
+
+full_join$isOtherGO[is.na(full_join$isOtherGO)] = 0
+
+full_join$GO[is.na(full_join$GO)] = 0
+full_join$InnateDB[is.na(full_join$InnateDB)] = 0
+full_join$KEGG[is.na(full_join$KEGG)] = 0
+full_join$ReactomeDB[is.na(full_join$ReactomeDB)] = 0
+
+# filter for proteins in ppi
+full_join <- full_join %>% filter(Symbol %in% V(ncppi_g)$name) %>% unique()
+```
+
+```{r}
+write.table(full_join, "/Users/ursulawidocki/Desktop/BarabasiLab/Data/immunity_genes_all_noncoding.tsv", sep = "\t", row.names = T, col.names = T)
+```
+
+
+
+# look at full_join to make sure it can still give expected results
+```{r}
+temp <- full_join %>% 
+  dplyr::select(Symbol, InnateDB) %>%
+  filter(InnateDB == 1)
+length(unique(temp$Symbol))
+
+# number of pathways in InnateDB
+length(unique(c(full_join$InnateDBPathway)))
+```
+
+
+
+
+
+
+######################################################################
+# Code I am not using
+
+### ReactomeDB
+#```{r}
+# for ReactomeDB
+library(reactome.db)
+reactomeIDs <- reactomePATHNAME2ID # maps Reactome path identifiers to reactomeIDs
+entrezGenes <- reactomePATHID2EXTID # maps reactome IDs to Entrez gene names
+entrez_to_ID <- reactomeEXTID2PATHID
+path_ID_to_name <- reactomePATHID2NAME
+#```
+
+
+## Get innate immunity genes from ReactomeDB
+#```{r}
+## List of all pathways I need
+
+innate_paths <- c("Homo sapiens: Innate Immune System",
+                  "Homo sapiens: Toll-like Receptor Cascades", 
+                  "Homo sapiens: Complement cascade", 
+                  "Homo sapiens: Nucleotide-binding domain, leucine rich repeat containing receptor (NLR) signaling pathways", 
+                  "Homo sapiens: Advanced glycosylation endproduct receptor signaling",
+                  "Homo sapiens: DDX58/IFIH1-mediated induction of interferon-alpha/beta",
+                  "Homo sapiens: Cytosolic sensors of pathogen-associated DNA ", 
+                  "Homo sapiens: Fcgamma receptor (FCGR) dependent phagocytosis", 
+                  "Homo sapiens: DAP12 interactions", 
+                  "Homo sapiens: Fc epsilon receptor (FCERI) signaling", 
+                  "Homo sapiens: C-type lectin receptors (CLRs)", 
+                  "Homo sapiens: Antimicrobial peptides", 
+                  "Homo sapiens: Neutrophil degranulation", 
+                  "Homo sapiens: ROS and RNS production in phagocytes", 
+                  "Homo sapiens: Alpha-protein kinase 1 signaling pathway", 
+                  
+                  "Homo sapiens: Cytokine Signaling in Immune system",
+                  "Homo sapiens: Interferon Signaling", 
+                  "Homo sapiens: Signaling by Interleukins",
+                  "Homo sapiens: Growth hormone receptor signaling",
+                  "Homo sapiens: Prolactin receptor signaling", 
+                  "Homo sapiens: TNFR2 non-canonical NF-kB pathway", 
+                  "Homo sapiens: FLT3 Signaling", 
+                  "Homo sapiens: Signaling by CSF3 (G-CSF)")
+
+# Get all Reactome IDs for all of the paths
+path_IDs <- c()
+for (path in innate_paths){
+  path_IDs <- append(path_IDs, reactomeIDs[[path]])
+  
+}
+
+# set up df to store genes and paths
+col_labels <- c("Symbol", "ReactomePathwayInnate", "ReactomePathIDInnate", "ReactomeDB")
+reactome_innate_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(reactome_innate_df) <- col_labels
+
+for (ID in path_IDs){
+  reactome_genes = entrezGenes[[ID]] # gets all Entrez genes in paths
+  
+  for(g in reactome_genes){
+    if(g %in% gene_human$GeneID){
+      sym_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+      name_path <- path_ID_to_name[[ID]]
+      new_line <- c(sym_gene, name_path, ID, "1")
+      reactome_innate_df[nrow(reactome_innate_df) + 1,] <- new_line
+      
+    }
+  }
+}
+
+reactome_innate_df$isInnateReactome = 1
+
+#```
+
+## Get adaptive immunity genes in ReactomeDB
+#```{r}
+## List of all pathways I need
+
+adapt_paths <- c("Homo sapiens: Adaptive Immune System",
+                 "Homo sapiens: TCR signaling",
+                 "Homo sapiens: Costimulation by the CD28 family",
+                 "Homo sapiens: Signaling by the B Cell Receptor (BCR)",
+                 "Homo sapiens: Class I MHC mediated antigen processing & presentation",
+                 "Homo sapiens: MHC class II antigen presentation",
+                 "Homo sapiens: Immunoregulatory interactions between a Lymphoid and a non-Lymphoid cell",
+                 "Homo sapiens: Rap1 signaling",
+                 "Homo sapiens: Butyrophilin (BTN) family interactions", 
+                 
+                 "Homo sapiens: Cytokine Signaling in Immune system",
+                 "Homo sapiens: Interferon Signaling", 
+                 "Homo sapiens: Signaling by Interleukins",
+                 "Homo sapiens: Growth hormone receptor signaling",
+                 "Homo sapiens: Prolactin receptor signaling", 
+                 "Homo sapiens: TNFR2 non-canonical NF-kB pathway", 
+                 "Homo sapiens: FLT3 Signaling", 
+                 "Homo sapiens: Signaling by CSF3 (G-CSF)")
+
+# Get all Reactome IDs for all of the paths
+path_IDs <- c()
+for (path in adapt_paths){
+  path_IDs <- append(path_IDs, reactomeIDs[[path]])
+  
+}
+
+# set up df to store genes and paths
+col_labels <- c("Symbol", "ReactomePathwayAdaptive", "ReactomePathIDAdaptive", "ReactomeDB")
+reactome_adapt_df <- data.frame(matrix(ncol = length(col_labels), nrow = 0))
+colnames(reactome_adapt_df) <- col_labels
+
+for (ID in path_IDs){
+  
+  reactome_genes = entrezGenes[[ID]] # gets all Entrez genes in paths
+  
+  for(g in reactome_genes){
+    
+    if(g %in% gene_human$GeneID){
+      sym_gene <- gene_human[which(gene_human$GeneID == g),"Symbol"]
+      name_path <- path_ID_to_name[[ID]]
+      new_line <- c(sym_gene, name_path, ID, "1")
+      reactome_adapt_df[nrow(reactome_adapt_df) + 1,] <- new_line
+      
+    }
+  }
+}
+
+reactome_adapt_df$isAdaptiveReactome = 1
+#```
+
+### Bring together all databases with ReactomeDB
+
+#```{r}
+full_join_g = plyr::join_all(list(go_innate_df, go_adapt_df, go_other_df), type = "full")
+full_join_k = plyr::join_all(list(kegg_innate_df, kegg_adapt_df), type = "full")
+#full_join_r = plyr::join_all(list(reactome_innate_df, reactome_adapt_df), type = "full")
+#full_join = plyr::join_all(list(full_join_g, full_join_k, 
+#                                full_join_r, innatedb_df), type = "full")
+full_join = plyr::join_all(list(full_join_g, full_join_k, innatedb_df), type = "full")
+
+full_join$isInnateGO[is.na(full_join$isInnateGO)] = 0
+full_join$isInnateKEGG[is.na(full_join$isInnateKEGG)] = 0
+#full_join$isInnateReactome[is.na(full_join$isInnateReactome)] = 0
+full_join$isInnateInnateDB[is.na(full_join$isInnateInnateDB)] = 0
+
+full_join$isAdaptiveGO[is.na(full_join$isAdaptiveGO)] = 0
+full_join$isAdaptiveKEGG[is.na(full_join$isAdaptiveKEGG)] = 0
+#full_join$isAdaptiveReactome[is.na(full_join$isAdaptiveReactome)] = 0
+
+full_join$isOtherGO[is.na(full_join$isOtherGO)] = 0
+
+full_join$GO[is.na(full_join$GO)] = 0
+full_join$InnateDB[is.na(full_join$InnateDB)] = 0
+full_join$KEGG[is.na(full_join$KEGG)] = 0
+#full_join$ReactomeDB[is.na(full_join$ReactomeDB)] = 0
+
+full_join <- full_join %>% unique() 
+#```
+
